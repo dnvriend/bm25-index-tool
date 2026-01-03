@@ -1,0 +1,69 @@
+[project]
+name = "bm25-index-tool"
+version = "0.1.0"
+description = "A Python CLI tool"
+requires-python = ">=3.14"
+authors = [
+    {name = "Dennis Vriend", email = "dvriend@ilionx.com"}
+]
+license = {text = "MIT"}
+readme = "README.md"
+keywords = ["cli", "tool"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.14",
+]
+dependencies = [
+    "typer>=0.15.0",
+]
+
+[project.optional-dependencies]
+telemetry = [
+    "opentelemetry-api>=1.20.0",
+    "opentelemetry-sdk>=1.20.0",
+    "opentelemetry-exporter-otlp>=1.20.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/dnvriend/bm25-index-tool"
+Repository = "https://github.com/dnvriend/bm25-index-tool"
+Issues = "https://github.com/dnvriend/bm25-index-tool/issues"
+
+[project.scripts]
+bm25-index-tool = "bm25_index_tool.cli:app"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[dependency-groups]
+dev = [
+    "ruff>=0.8.0",
+    "mypy>=1.7.0",
+    "pytest>=7.4.0",
+    "bandit>=1.7.0",
+    "pip-audit>=2.6.0",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py314"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W", "UP"]
+ignore = []
+
+[tool.mypy]
+python_version = "3.14"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+disallow_any_generics = true
+strict = true
+
+[tool.bandit]
+exclude_dirs = ["tests", ".venv", "venv"]
+skips = ["B101"]  # Skip assert_used (common in tests)

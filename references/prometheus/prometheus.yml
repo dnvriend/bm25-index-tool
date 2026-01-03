@@ -1,0 +1,22 @@
+# Prometheus Configuration for bm25-index-tool
+#
+# Receives metrics from Grafana Alloy via remote write.
+# Access at http://localhost:9090
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+# Remote write receiver is enabled via command line flag:
+# --web.enable-remote-write-receiver
+
+# Optional: scrape Prometheus itself
+scrape_configs:
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+
+  # Optional: scrape Alloy metrics
+  - job_name: 'alloy'
+    static_configs:
+      - targets: ['alloy:12345']

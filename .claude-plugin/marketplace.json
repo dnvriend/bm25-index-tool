@@ -1,0 +1,19 @@
+{
+    "name": "bm25-index-tool",
+    "owner": {
+        "name": "Dennis Vriend",
+        "email": "dvriend@ilionx.com",
+        "url": "https://github.com/dnvriend"
+    },
+    "metadata": {
+        "description": "Marketplace for bm25-index-tool CLI plugin - A Python CLI tool",
+        "version": "0.1.0"
+    },
+    "plugins": [
+        {
+            "name": "bm25-index-tool",
+            "source": "./plugins/bm25-index-tool",
+            "description": "A Python CLI tool"
+        }
+    ]
+}
