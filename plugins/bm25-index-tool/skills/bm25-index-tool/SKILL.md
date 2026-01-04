@@ -1,63 +1,54 @@
 ---
 name: skill-bm25-index-tool
-description: A Python CLI tool
+description: Lightning-fast BM25 full-text search for files
 ---
 
-<!--
-⚠️ AGENT INSTRUCTIONS: This is a skeleton SKILL.md template
-When details about this CLI tool become clearer, update this file with:
-
-1. **When to use section**: Add 3-5 specific use cases (bullet points)
-2. **Purpose section**: Expand the tool's purpose and capabilities
-3. **When to Use This Skill**: Add specific scenarios and anti-patterns
-4. **Installation**: Keep the standard installation instructions
-5. **Quick Start**: Add 2-3 practical quick start examples
-6. **Core Commands**: Add detailed documentation for each CLI command in collapsible sections
-7. **Advanced Features**: Document advanced features like verbosity, shell completion, pipelines
-8. **Troubleshooting**: Add common issues and solutions
-9. **Best Practices**: Add 3-5 best practices for using the tool
-10. **Resources**: Update with actual GitHub URL and documentation links
-
-CRITICAL REQUIREMENTS:
-- Keep description in frontmatter ≤ 50 characters (hard limit)
-- Use progressive disclosure with <details> tags
-- Include comprehensive examples in each section
-- Provide troubleshooting guidance
-- Keep always-visible content minimal (overview only)
-- Put detailed info in expandable sections
-- Use emojis for section summaries (📖 Core, ⚙️ Advanced, 🔧 Troubleshooting)
--->
-
 # When to use
-<!-- TODO: Add specific use cases when CLI functionality is known -->
-- When you need to use bm25-index-tool CLI tool
-- When you need comprehensive guidance on CLI commands
-- When you need examples and troubleshooting
+
+- Search large document collections (knowledge bases, notes, code)
+- Index files with glob patterns for instant full-text search
+- Query multiple indices simultaneously with merge strategies
+- Find related documents using TF-IDF similarity
+- Track search history and analyze query patterns
+- Process batch queries efficiently with parallel execution
 
 # bm25-index-tool Skill
 
 ## Purpose
 
-<!-- TODO: Expand with specific tool capabilities -->
-This skill provides access to the `bm25-index-tool` CLI tool. A Python CLI tool.
+This skill provides comprehensive access to `bm25-index-tool`, a production-ready CLI for lightning-fast full-text search using the BM25 ranking algorithm. Designed for AI agents and developers who need powerful search with minimal setup.
+
+**Core Capabilities:**
+- **Index Creation**: Index thousands of files in seconds with glob patterns
+- **Search**: Query single or multiple indices with BM25 ranking
+- **Path Filtering**: Scope searches to specific directories with glob patterns
+- **Related Documents**: Find similar content using TF-IDF
+- **Batch Processing**: Process multiple queries with parallel execution
+- **Query History**: Track all searches in SQLite database
+- **Statistics**: Analyze index health, vocabulary, term frequencies
+- **Caching**: LRU cache for repeated queries
+- **Merge Strategies**: Combine multi-index results (RRF, union, intersection, weighted)
 
 ## When to Use This Skill
 
 **Use this skill when:**
-<!-- TODO: Add specific scenarios, e.g., -->
-- You need to understand how to use bm25-index-tool
-- You need comprehensive examples and patterns
-- You need troubleshooting guidance
+- Searching knowledge bases, notes, documentation, or code
+- Building search features in applications
+- Analyzing document collections with BM25 ranking
+- Finding related content based on similarity
+- Processing batch queries for efficiency
+- Working with Obsidian vaults, documentation sites, or code repositories
+- Needing JSON output for downstream processing
 
 **Do NOT use this skill for:**
-<!-- TODO: Add anti-patterns, e.g., -->
-- Tasks unrelated to bm25-index-tool
-- Quick syntax lookups (use slash commands instead)
+- Tasks requiring real-time indexing (index rebuild required)
+- Incremental updates (full re-index only)
+- Fuzzy matching (BM25 is keyword-based)
+- Vector search or semantic similarity (use embeddings instead)
 
 ## CLI Tool: bm25-index-tool
 
-<!-- TODO: Add tool overview -->
-The `bm25-index-tool` is a command-line interface tool that A Python CLI tool.
+The `bm25-index-tool` provides lightning-fast BM25 search with advanced features like multi-index queries, path filtering, related documents, and comprehensive history tracking.
 
 ### Installation
 
@@ -75,13 +66,18 @@ uv tool install .
 
 ### Quick Start
 
-<!-- TODO: Add 2-3 practical quick start examples when commands are known -->
 ```bash
-# Example 1: Basic usage
-bm25-index-tool --help
+# Create an index from markdown files
+bm25-index-tool create vault --pattern "~/vault/**/*.md"
 
-# Example 2: Show version
-bm25-index-tool --version
+# Search the index
+bm25-index-tool query vault "kubernetes networking"
+
+# Search with JSON output (AI agent friendly)
+bm25-index-tool query vault "docker" --format json
+
+# Get comprehensive help with examples
+bm25-index-tool query --help  # Shows 20+ examples
 ```
 
 ## Progressive Disclosure

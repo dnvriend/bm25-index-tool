@@ -18,6 +18,13 @@ classifiers = [
 ]
 dependencies = [
     "typer>=0.15.0",
+    "bm25s>=0.2.14",
+    "ranx>=0.3.21",
+    "pathspec>=0.12.0",
+    "PyStemmer>=2.2.0",
+    "pydantic>=2.9.0",
+    "tomli>=2.0.1",
+    "rich>=13.0.0",
 ]
 
 [project.optional-dependencies]

@@ -86,9 +86,7 @@ class TelemetryService:
                 config.exporter_type.value,
             )
         except ImportError as e:
-            logger.warning(
-                "OpenTelemetry dependencies not installed, telemetry disabled: %s", e
-            )
+            logger.warning("OpenTelemetry dependencies not installed, telemetry disabled: %s", e)
             self._config = TelemetryConfig(enabled=False)
             self._initialized = True
 
@@ -210,7 +208,11 @@ class TelemetryService:
         Returns:
             True if telemetry is enabled and initialized.
         """
-        return self._initialized and getattr(self, "_config", None) is not None and self._config.enabled
+        return (
+            self._initialized
+            and getattr(self, "_config", None) is not None
+            and self._config.enabled
+        )
 
     def shutdown(self) -> None:
         """Shut down telemetry providers.

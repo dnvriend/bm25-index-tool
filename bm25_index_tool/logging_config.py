@@ -81,11 +81,20 @@ def setup_logging(
         _setup_console_handler(root_logger, level, fmt)
 
     # Configure dependent library loggers at TRACE level (-vvv)
-    # Add your project-specific library loggers here
-    # Example:
-    #   if verbose_count >= 3:
-    #       logging.getLogger("requests").setLevel(logging.DEBUG)
-    #       logging.getLogger("urllib3").setLevel(logging.DEBUG)
+    if verbose_count >= 3:
+        # OpenTelemetry libraries (if telemetry enabled)
+        logging.getLogger("opentelemetry").setLevel(logging.DEBUG)
+        logging.getLogger("opentelemetry.sdk").setLevel(logging.DEBUG)
+
+        # BM25S and dependencies
+        logging.getLogger("bm25s").setLevel(logging.DEBUG)
+        logging.getLogger("ranx").setLevel(logging.DEBUG)
+    else:
+        # Suppress noisy libraries at lower verbosity levels
+        logging.getLogger("opentelemetry").setLevel(logging.WARNING)
+        logging.getLogger("opentelemetry.sdk").setLevel(logging.WARNING)
+        logging.getLogger("bm25s").setLevel(logging.WARNING)
+        logging.getLogger("ranx").setLevel(logging.WARNING)
 
 
 def _setup_console_handler(

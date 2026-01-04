@@ -2,11 +2,34 @@
 
 ## Goal
 
-A Python CLI tool
+A Python CLI tool for lightning-fast full-text search using BM25 ranking algorithm.
 
 ## What is bm25-index-tool?
 
-`bm25-index-tool` is a command-line utility built with modern Python tooling and best practices.
+`bm25-index-tool` provides production-ready full-text search capabilities with the BM25 ranking algorithm. Designed for AI agents and developers who need powerful search with minimal setup.
+
+**Core Capabilities:**
+- **Create Indices**: Index files using glob patterns with BM25 algorithm
+- **Search**: Query single or multiple indices with BM25 ranking
+- **Filter**: Path-based filtering with glob patterns
+- **Related Docs**: Find similar documents using TF-IDF
+- **Batch Query**: Process multiple queries efficiently with parallel execution
+- **History**: Track queries in SQLite database
+- **Statistics**: Analyze index health and term frequencies
+- **Caching**: LRU cache for search results
+- **Merge Strategies**: Combine multi-index results (RRF, union, intersection, weighted)
+
+**Design Philosophy:**
+- Agent-friendly with comprehensive help text and inline examples
+- JSON output for all commands
+- SOLID architecture with clean interfaces
+- Type-safe with mypy strict mode
+- Fast indexing (~1 second for 2,000 files)
+
+**Storage:**
+- Indices: `~/.config/bm25-index-tool/indices/<name>/`
+- History: `~/.config/bm25-index-tool/history.db` (SQLite)
+- Registry: `~/.config/bm25-index-tool/registry.json`
 
 ## Technical Requirements
 
@@ -35,21 +58,52 @@ A Python CLI tool
 - `pip-audit` - Dependency vulnerability scanning
 - `gitleaks` - Secret detection (requires separate installation)
 
-## CLI Arguments
+## Available Commands
 
-```bash
-bm25-index-tool [OPTIONS]
-```
+### Core Commands
 
-### Options
+- **create** - Create a new BM25 index from files
+- **query** - Search one or more indices
+- **list** - List all available indices
+- **info** - Show detailed index metadata
+- **stats** - Display index statistics and health metrics
+- **update** - Rebuild an existing index
+- **delete** - Permanently delete an index
+- **batch** - Execute multiple queries efficiently
+- **history** - Manage query history (show, clear, stats)
+- **completion** - Generate shell completion scripts
+
+### Global Options
 
 - `-v, --verbose` - Enable verbose output (count flag: -v, -vv, -vvv)
   - `-v` (count=1): INFO level logging
   - `-vv` (count=2): DEBUG level logging
   - `-vvv` (count=3+): TRACE level (includes library internals)
 - `--telemetry` - Enable OpenTelemetry observability (or set OTEL_ENABLED=true)
-- `--help` / `-h` - Show help message
+- `--help` / `-h` - Show help message with examples
 - `--version` - Show version
+
+### Command Examples
+
+```bash
+# Create index
+bm25-index-tool create vault --pattern "~/vault/**/*.md"
+
+# Search with filters
+bm25-index-tool query vault "kubernetes" --path-filter "reference/**"
+
+# Multi-index search
+bm25-index-tool query "vault,docs" "api design"
+
+# Related documents
+bm25-index-tool query vault --related-to "notes/ai.md"
+
+# Batch queries
+echo -e "docker\\nkubernetes" | bm25-index-tool batch vault --parallel
+
+# View history
+bm25-index-tool history show --limit 50
+```
 
 ## Project Structure
 
