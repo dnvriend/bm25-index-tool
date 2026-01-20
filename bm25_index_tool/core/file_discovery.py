@@ -15,6 +15,52 @@ from bm25_index_tool.logging_config import get_logger
 logger = get_logger(__name__)
 
 
+def expand_pattern_to_absolute(pattern: str) -> str:
+    """Expand a glob pattern to an absolute path.
+
+    Expands environment variables, tilde, and relative paths to create
+    a fully qualified absolute pattern suitable for index storage.
+
+    Args:
+        pattern: Glob pattern which may contain:
+                 - Environment variables: $HOME, $OBSIDIAN_HOME, ${VAR}
+                 - Tilde: ~, ~user
+                 - Relative paths: ., .., ./path, ../path
+                 - Relative globs: **/*.md, *.py
+
+    Returns:
+        Absolute pattern with all expansions applied
+
+    Examples:
+        "**/*.md" -> "/Users/dennis/projects/**/*.md"
+        "./**/*.md" -> "/Users/dennis/projects/**/*.md"
+        "$HOME/vault/**/*.md" -> "/Users/dennis/vault/**/*.md"
+        "~/docs/*.txt" -> "/Users/dennis/docs/*.txt"
+    """
+    logger.debug("Expanding pattern to absolute: %s", pattern)
+
+    # 1. Expand environment variables first (e.g., $HOME, $OBSIDIAN_HOME, ${VAR})
+    expanded = os.path.expandvars(pattern)
+
+    # 2. Expand user home directory (~, ~user)
+    expanded = os.path.expanduser(expanded)
+
+    # 3. Handle relative paths and patterns
+    # Check if pattern starts with . or .. or is a relative glob
+    if expanded.startswith("./"):
+        # Remove leading ./ and prepend CWD
+        expanded = str(Path.cwd() / expanded[2:])
+    elif expanded.startswith("../"):
+        # Resolve .. relative to CWD
+        expanded = str((Path.cwd() / expanded).resolve())
+    elif not expanded.startswith("/"):
+        # Relative pattern without ./ prefix (e.g., "**/*.md", "src/**/*.py")
+        expanded = str(Path.cwd() / expanded)
+
+    logger.debug("Expanded pattern: %s", expanded)
+    return expanded
+
+
 def natural_sort_key(path: Path) -> tuple[float, str]:
     """Generate sort key for natural sorting.
 

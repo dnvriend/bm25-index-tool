@@ -10,7 +10,7 @@ from typing import Annotated
 import typer
 
 from bm25_index_tool.config.models import BM25Params, BM25Profile, TokenizationConfig
-from bm25_index_tool.core.file_discovery import discover_files
+from bm25_index_tool.core.file_discovery import discover_files, expand_pattern_to_absolute
 from bm25_index_tool.core.indexer import BM25Indexer
 from bm25_index_tool.logging_config import get_logger, setup_logging
 
@@ -103,8 +103,13 @@ def create_command(
 
     start_time = time.time()
 
+    # Expand pattern to absolute path for reproducible updates
+    absolute_pattern = expand_pattern_to_absolute(pattern)
+    logger.debug("Original pattern: %s", pattern)
+    logger.debug("Expanded pattern: %s", absolute_pattern)
+
     typer.echo(f"Creating index '{name}'...")
-    logger.debug("Pattern: %s", pattern)
+    typer.echo(f"Pattern: {absolute_pattern}")
 
     # Determine BM25 parameters
     if k1 is not None and b is not None:
@@ -132,10 +137,9 @@ def create_command(
         typer.echo("Stemmer: disabled")
 
     # Discover files
-    typer.echo(f"Discovering files with pattern: {pattern}")
     logger.debug("respect_gitignore=%s", not no_gitignore)
     try:
-        files = discover_files(pattern, respect_gitignore=not no_gitignore)
+        files = discover_files(absolute_pattern, respect_gitignore=not no_gitignore)
         logger.info("Found %d files to index", len(files))
         typer.echo(f"Found {len(files)} files")
     except ValueError as e:
@@ -153,7 +157,7 @@ def create_command(
             files=files,
             params=params,
             tokenization=tokenization,
-            glob_pattern=pattern,
+            glob_pattern=absolute_pattern,
         )
 
         elapsed = time.time() - start_time
