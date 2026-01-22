@@ -5,6 +5,7 @@ and has been reviewed and tested by a human.
 """
 
 import json
+from pathlib import Path
 from typing import Any
 
 from bm25_index_tool.logging_config import get_logger
@@ -57,16 +58,29 @@ def format_simple(
     lines = []
     for idx, result in enumerate(results, 1):
         score = result["score"]
-        name = result["name"]
+        name = result.get("name") or Path(result["path"]).name
         path = result["path"]
         fragments = result.get("fragments", [])
         content = result.get("content", "")
+        chunk_text = result.get("chunk_text", "")
 
         lines.append(f"[{idx}] {name} (score: {score:.4f})")
         lines.append(f"    {path}")
 
+        # Display chunk text for vector search results
+        if chunk_text:
+            chunk_idx = result.get("chunk_index", 0)
+            word_count = result.get("word_count", 0)
+            lines.append(f"    Chunk {chunk_idx} ({word_count} words):")
+            lines.append("    " + "-" * 40)
+            # Truncate chunk text for display
+            display_chunk = chunk_text[:500] + "..." if len(chunk_text) > 500 else chunk_text
+            for line in display_chunk.splitlines():
+                lines.append(f"    {line}")
+            lines.append("")
+
         # Display fragments if present
-        if fragments:
+        elif fragments:
             lines.append("")
             for frag_idx, fragment in enumerate(fragments, 1):
                 line_start = fragment["line_start"]
@@ -113,11 +127,17 @@ def format_json(
     # Build output with optional fragments and content
     output = []
     for result in results:
-        item = {
+        item: dict[str, Any] = {
             "path": result["path"],
-            "name": result["name"],
+            "name": result.get("name") or Path(result["path"]).name,
             "score": result["score"],
         }
+
+        # Include vector search specific fields
+        if "chunk_text" in result:
+            item["chunk_text"] = result["chunk_text"]
+            item["chunk_index"] = result.get("chunk_index", 0)
+            item["word_count"] = result.get("word_count", 0)
 
         # Include fragments if present
         if "fragments" in result:
@@ -162,17 +182,29 @@ def format_rich(
 
     for idx, result in enumerate(results, 1):
         score = result["score"]
-        name = result["name"]
+        name = result.get("name") or Path(result["path"]).name
         path = result["path"]
         content = result.get("content", "")
         fragments = result.get("fragments", [])
+        chunk_text = result.get("chunk_text", "")
 
         # Header
         output_lines.append(f"\n[{idx}] {name} (score: {score:.4f})")
         output_lines.append(f"    {path}\n")
 
+        # Show chunk text for vector search results
+        if chunk_text:
+            chunk_idx = result.get("chunk_index", 0)
+            word_count = result.get("word_count", 0)
+            output_lines.append(f"    Chunk {chunk_idx} ({word_count} words):")
+            output_lines.append("    " + "=" * 60)
+            display_chunk = chunk_text[:500] + "..." if len(chunk_text) > 500 else chunk_text
+            for line in display_chunk.splitlines():
+                output_lines.append(f"    {line}")
+            output_lines.append("")
+
         # Show fragments if present, otherwise show first 5 lines
-        if fragments:
+        elif fragments:
             for frag_idx, fragment in enumerate(fragments, 1):
                 line_start = fragment["line_start"]
                 line_end = fragment["line_end"]
