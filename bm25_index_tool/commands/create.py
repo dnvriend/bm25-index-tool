@@ -9,12 +9,19 @@ from typing import Annotated
 
 import typer
 
-from bm25_index_tool.config.models import BM25Params, BM25Profile, TokenizationConfig
+from bm25_index_tool.config.models import (
+    BM25Params,
+    BM25Profile,
+    TokenizationConfig,
+    VectorConfig,
+)
 from bm25_index_tool.core.file_discovery import discover_files, expand_pattern_to_absolute
 from bm25_index_tool.core.indexer import BM25Indexer
 from bm25_index_tool.logging_config import get_logger, setup_logging
 
 logger = get_logger(__name__)
+
+DEFAULT_EMBEDDING_MODEL = "amazon.nova-2-multimodal-embeddings-v1:0"
 
 app = typer.Typer()
 
@@ -52,17 +59,40 @@ def create_command(
         bool,
         typer.Option("--no-gitignore", help="Disable .gitignore respect"),
     ] = False,
+    model: Annotated[
+        str,
+        typer.Option("--model", help="Embedding model ID for vector search"),
+    ] = DEFAULT_EMBEDDING_MODEL,
+    chunk_size: Annotated[
+        int,
+        typer.Option("--chunk-size", help="Words per chunk for vector search"),
+    ] = 300,
+    chunk_overlap: Annotated[
+        int,
+        typer.Option("--chunk-overlap", help="Overlap words between chunks"),
+    ] = 50,
+    dimensions: Annotated[
+        int,
+        typer.Option(
+            "--dimensions",
+            "-d",
+            help="Embedding dimensions (Nova: 256/512/1024/3072, Titan: 1024)",
+        ),
+    ] = 3072,
+    no_vector: Annotated[
+        bool,
+        typer.Option("--no-vector", help="Skip vector index creation"),
+    ] = False,
 ) -> None:
     """Create a new BM25 index from files matching a glob pattern.
 
-    Creates a full-text search index using the BM25 ranking algorithm. Supports
-    recursive file discovery with glob patterns, .gitignore filtering, custom
-    BM25 parameters, and stemming.
+    Creates a full-text search index using the BM25 ranking algorithm. By default,
+    also creates a vector index for semantic search using AWS Bedrock embeddings.
 
     Examples:
 
     \b
-        # Basic: Index all markdown files in current directory
+        # Basic: Index all markdown files (creates both BM25 + vector)
         bm25-index-tool create notes --pattern "*.md"
 
     \b
@@ -74,17 +104,30 @@ def create_command(
         bm25-index-tool create vault --pattern "~/projects/obsidian/**/*.md"
 
     \b
-        # Environment variables: Index from configured path
-        bm25-index-tool create docs --pattern "$DOCS_DIR/**/*.txt"
+        # Custom embedding model
+        bm25-index-tool create vault --pattern "**/*.md" \
+            --model amazon.titan-embed-text-v2:0
 
     \b
-        # Code profile: Better for source code (lower term frequency weight)
+        # Custom chunk settings
+        bm25-index-tool create docs --pattern "**/*.md" \\
+            --chunk-size 500 --chunk-overlap 100
+
+    \b
+        # Custom dimensions (Nova supports 256, 512, 1024, 3072)
+        bm25-index-tool create compact --pattern "**/*.md" --dimensions 1024
+
+    \b
+        # Skip vector index (BM25 only)
+        bm25-index-tool create notes --pattern "**/*.md" --no-vector
+
+    \b
+        # Code profile: Better for source code
         bm25-index-tool create codebase --pattern "src/**/*.py" --profile code
 
     \b
-        # Custom parameters: Fine-tune BM25 scoring
-        bm25-index-tool create custom --pattern "docs/**/*.md" \
-            --k1 1.5 --b 0.75
+        # Custom BM25 parameters
+        bm25-index-tool create custom --pattern "docs/**/*.md" --k1 1.5 --b 0.75
 
     \b
         # With stemming: Enable English word stemming
@@ -147,7 +190,15 @@ def create_command(
         typer.echo(f"Error: {e}", err=True)
         raise typer.Exit(code=1)
 
-    # Create index
+    # Create vector config
+    vector_config = VectorConfig(
+        model_id=model,
+        chunk_size=chunk_size,
+        chunk_overlap=chunk_overlap,
+        dimensions=dimensions,
+    )
+
+    # Create BM25 index
     logger.debug("Initializing BM25Indexer")
     indexer = BM25Indexer()
     try:
@@ -160,11 +211,8 @@ def create_command(
             glob_pattern=absolute_pattern,
         )
 
-        elapsed = time.time() - start_time
-        logger.info("Index created successfully in %.2fs", elapsed)
-        typer.echo(f"\nIndex '{name}' created successfully!")
+        typer.echo("\nBM25 index created!")
         typer.echo(f"Files indexed: {metadata.file_count}")
-        typer.echo(f"Time: {elapsed:.2f}s")
 
     except ValueError as e:
         logger.error("Index creation failed: %s", e)
@@ -174,3 +222,36 @@ def create_command(
         logger.exception("Failed to create index")
         typer.echo(f"Error: {e}", err=True)
         raise typer.Exit(code=1)
+
+    # Create vector index (unless --no-vector)
+    if not no_vector:
+        typer.echo(f"\nCreating vector index (model: {model})...")
+        try:
+            from bm25_index_tool.vector import VectorIndexer
+
+            vector_indexer = VectorIndexer(config=vector_config)
+            vector_metadata = vector_indexer.create_index(name=name, files=files)
+
+            # Update metadata with vector info
+            metadata.vector_metadata = vector_metadata
+            indexer.update_metadata(name, metadata)
+
+            typer.echo("Vector index created!")
+            typer.echo(f"Chunks: {vector_metadata.chunk_count}")
+            typer.echo(f"Estimated cost: ${vector_metadata.estimated_cost_usd:.4f}")
+
+        except ImportError:
+            logger.warning("Vector dependencies not installed, skipping vector index")
+            typer.echo(
+                "Warning: Vector dependencies not installed. Install with: uv sync --extra vector",
+                err=True,
+            )
+        except Exception as e:
+            logger.exception("Failed to create vector index")
+            typer.echo(f"Warning: Vector index creation failed: {e}", err=True)
+            typer.echo("BM25 index was created successfully, but vector search unavailable.")
+
+    elapsed = time.time() - start_time
+    logger.info("Index created successfully in %.2fs", elapsed)
+    typer.echo(f"\nIndex '{name}' created successfully!")
+    typer.echo(f"Time: {elapsed:.2f}s")

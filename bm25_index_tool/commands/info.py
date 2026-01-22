@@ -89,6 +89,20 @@ def info_command(
         stemmer = metadata["tokenization"]["stemmer"]
         lines.append(f"  Stemmer: {stemmer if stemmer else 'disabled'}")
         lines.append(f"  Stopwords: {metadata['tokenization']['stopwords']}")
+
+        # Vector search metadata
+        vector_metadata = metadata.get("vector_metadata")
+        if vector_metadata:
+            lines.append("\nVector Search:")
+            lines.append(f"  Model: {vector_metadata['embedding_model']}")
+            lines.append(f"  Chunks: {vector_metadata['chunk_count']:,}")
+            lines.append(f"  Dimensions: {vector_metadata['dimensions']}")
+            lines.append(f"  Chunk Size: {vector_metadata['chunk_size']} words")
+            lines.append(f"  Chunk Overlap: {vector_metadata['chunk_overlap']} words")
+            lines.append(f"  Estimated Cost: ${vector_metadata['estimated_cost_usd']:.4f}")
+        else:
+            lines.append("\nVector Search: not available")
+
         output = "\n".join(lines)
 
     typer.echo(output)

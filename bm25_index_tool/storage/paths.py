@@ -58,3 +58,27 @@ def get_config_file_path() -> Path:
         Path to ~/.config/bm25-index-tool/config.toml
     """
     return get_config_dir() / "config.toml"
+
+
+def get_faiss_index_path(name: str) -> Path:
+    """Get the path to the FAISS vector index file.
+
+    Args:
+        name: Name of the index
+
+    Returns:
+        Path to ~/.config/bm25-index-tool/indices/{name}/vector.faiss
+    """
+    return get_index_dir(name) / "vector.faiss"
+
+
+def get_chunks_path(name: str) -> Path:
+    """Get the path to the chunks metadata file.
+
+    Args:
+        name: Name of the index
+
+    Returns:
+        Path to ~/.config/bm25-index-tool/indices/{name}/chunks.json
+    """
+    return get_index_dir(name) / "chunks.json"

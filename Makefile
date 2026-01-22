@@ -4,8 +4,8 @@
 help: ## Show this help message
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-30s\033[0m %s\n", $$1, $$2}'
 
-install: ## Install dependencies (including telemetry extras for type checking)
-	uv sync --extra telemetry
+install: ## Install dependencies (including telemetry and vector extras)
+	uv sync --extra telemetry --extra vector
 
 lint: ## Run linting with ruff
 	uv run ruff check .
@@ -48,7 +48,7 @@ build: ## Build package (force rebuild)
 
 install-global: build ## Install globally with uv tool (rebuilds first to avoid cache issues)
 	-uv tool uninstall bm25-index-tool 2>/dev/null
-	uv tool install . --reinstall
+	uv tool install ".[telemetry,vector]" --reinstall --python 3.14
 
 uninstall-global: ## Uninstall global installation
 	uv tool uninstall bm25-index-tool

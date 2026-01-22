@@ -142,10 +142,15 @@ def query_command(
         bool,
         typer.Option("--no-history", help="Disable logging query to history"),
     ] = False,
+    semantic: Annotated[
+        bool,
+        typer.Option("--semantic", "-s", help="Use semantic/vector search instead of BM25"),
+    ] = False,
 ) -> None:
-    """Search BM25 indices with powerful filtering and multi-index support.
+    """Search indices with BM25 or semantic/vector search.
 
-    Performs full-text search across one or more indices using BM25 ranking.
+    Performs full-text search across one or more indices using BM25 ranking,
+    or semantic search using vector embeddings when --semantic/-s is specified.
     Supports path filtering, content extraction, related document discovery,
     caching, and multiple merge strategies for combining results.
 
@@ -222,6 +227,15 @@ def query_command(
     \b
         # Disable history: Don't log this query
         bm25-index-tool query vault "private search" --no-history
+
+    \b
+        # Semantic search: Use vector embeddings for natural language queries
+        bm25-index-tool query vault "How do I configure network policies?" --semantic
+        bm25-index-tool query vault "best practices for container security" -s
+
+    \b
+        # Semantic with path filter
+        bm25-index-tool query vault "deployment strategies" -s --path-filter "k8s/**"
 
     \b
         # Complex query: Combine multiple features
@@ -358,42 +372,87 @@ def query_command(
     start_time = time.time()
 
     if results_cached is None:
-        searcher = BM25Searcher()
-
-        try:
-            if len(index_names) == 1:
-                # Single index search
-                results_cached = searcher.search_single(
-                    index_names[0],
-                    query,
-                    top_k=top,
-                    extract_fragments_flag=fragments,
-                    context_lines=context,
+        # Use semantic search if --semantic flag is set
+        if semantic:
+            try:
+                from bm25_index_tool.vector import MissingModelMetadataError, VectorSearcher
+            except ImportError:
+                typer.echo(
+                    "Error: Vector dependencies not installed. "
+                    "Install with: uv sync --extra vector",
+                    err=True,
                 )
-            else:
-                # Multi-index search with merge strategy
-                typer.echo(f"Searching {len(index_names)} indices with {merge_strategy} merge...")
+                raise typer.Exit(code=1)
 
-                # Create merge strategy instance
-                strategy = get_merge_strategy(merge_strategy, **merge_params_dict)
+            try:
+                vector_searcher = VectorSearcher()
+                logger.info("Using semantic search")
 
-                results_cached = searcher.search_multi(
-                    index_names,
-                    query,
-                    top_k=top,
-                    rrf_k=rrf_k,  # Still passed for backward compatibility
-                    extract_fragments_flag=fragments,
-                    context_lines=context,
-                    merge_strategy=strategy,
+                if len(index_names) == 1:
+                    results_cached = vector_searcher.search(
+                        index_names[0],
+                        query,
+                        top_k=top,
+                    )
+                else:
+                    results_cached = vector_searcher.search_multi(
+                        index_names,
+                        query,
+                        top_k=top,
+                    )
+
+            except MissingModelMetadataError as e:
+                typer.echo(
+                    f"Error: {e}\n\n"
+                    "Hint: Rebuild the index to add model metadata:\n"
+                    "  bm25-index-tool update <index-name>",
+                    err=True,
                 )
+                raise typer.Exit(code=1)
+            except Exception as e:
+                logger.exception("Semantic search failed")
+                typer.echo(f"Error: {e}", err=True)
+                raise typer.Exit(code=1)
+        else:
+            # BM25 search
+            searcher = BM25Searcher()
 
-        except ValueError as e:
-            typer.echo(f"Error: {e}", err=True)
-            raise typer.Exit(code=1)
-        except Exception as e:
-            logger.exception("Search failed")
-            typer.echo(f"Error: {e}", err=True)
-            raise typer.Exit(code=1)
+            try:
+                if len(index_names) == 1:
+                    # Single index search
+                    results_cached = searcher.search_single(
+                        index_names[0],
+                        query,
+                        top_k=top,
+                        extract_fragments_flag=fragments,
+                        context_lines=context,
+                    )
+                else:
+                    # Multi-index search with merge strategy
+                    typer.echo(
+                        f"Searching {len(index_names)} indices with {merge_strategy} merge..."
+                    )
+
+                    # Create merge strategy instance
+                    strategy = get_merge_strategy(merge_strategy, **merge_params_dict)
+
+                    results_cached = searcher.search_multi(
+                        index_names,
+                        query,
+                        top_k=top,
+                        rrf_k=rrf_k,  # Still passed for backward compatibility
+                        extract_fragments_flag=fragments,
+                        context_lines=context,
+                        merge_strategy=strategy,
+                    )
+
+            except ValueError as e:
+                typer.echo(f"Error: {e}", err=True)
+                raise typer.Exit(code=1)
+            except Exception as e:
+                logger.exception("Search failed")
+                typer.echo(f"Error: {e}", err=True)
+                raise typer.Exit(code=1)
 
     elapsed_seconds = time.time() - start_time
 

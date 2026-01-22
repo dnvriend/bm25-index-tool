@@ -15,6 +15,7 @@ from bm25_index_tool.commands.delete import delete_command
 from bm25_index_tool.commands.history import history_app
 from bm25_index_tool.commands.info import info_command
 from bm25_index_tool.commands.list import list_command
+from bm25_index_tool.commands.list_models import list_models_command
 from bm25_index_tool.commands.query import query_command
 from bm25_index_tool.commands.stats import stats_command
 from bm25_index_tool.commands.update import update_command
@@ -99,6 +100,7 @@ app.command(name="create", help="Create a new BM25 index")(create_command)
 app.command(name="query", help="Query BM25 indices")(query_command)
 app.command(name="batch", help="Batch query multiple queries")(batch_command)
 app.command(name="list", help="List all indices")(list_command)
+app.command(name="list-models", help="List available embedding models")(list_models_command)
 app.command(name="info", help="Show index information")(info_command)
 app.command(name="stats", help="Show index statistics")(stats_command)
 app.command(name="update", help="Update an index")(update_command)

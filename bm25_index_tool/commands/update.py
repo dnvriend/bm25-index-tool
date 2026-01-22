@@ -10,6 +10,7 @@ from typing import Annotated
 
 import typer
 
+from bm25_index_tool.config.models import VectorConfig
 from bm25_index_tool.core.file_discovery import discover_files
 from bm25_index_tool.core.indexer import BM25Indexer
 from bm25_index_tool.logging_config import get_logger, setup_logging
@@ -114,34 +115,83 @@ def update_command(
             typer.echo(f"Error: {e}", err=True)
         raise typer.Exit(code=1)
 
-    # Update index
+    # Update BM25 index
     logger.debug("Initializing BM25Indexer")
     indexer = BM25Indexer()
     try:
-        logger.info("Starting index update for %d files", len(files))
+        logger.info("Starting BM25 index update for %d files", len(files))
         updated_metadata = indexer.update_index(name, files)
 
-        elapsed = time.time() - start_time
-        logger.info("Index updated successfully in %.2fs", elapsed)
-
-        # Format output
-        if format == "json":
-            result = {
-                "status": "success",
-                "index": name,
-                "file_count": updated_metadata.file_count,
-                "elapsed_seconds": round(elapsed, 2),
-            }
-            typer.echo(json.dumps(result, indent=2))
-        else:
-            typer.echo(f"\nIndex '{name}' updated successfully!")
-            typer.echo(f"Files indexed: {updated_metadata.file_count}")
-            typer.echo(f"Time: {elapsed:.2f}s")
+        if format != "json":
+            typer.echo("BM25 index updated!")
 
     except Exception as e:
-        logger.exception("Failed to update index")
+        logger.exception("Failed to update BM25 index")
         if format == "json":
             typer.echo(json.dumps({"status": "error", "message": str(e)}), err=True)
         else:
             typer.echo(f"Error: {e}", err=True)
         raise typer.Exit(code=1)
+
+    # Check if vector index existed and rebuild it
+    vector_metadata_dict = metadata_dict.get("vector_metadata")
+    if vector_metadata_dict:
+        if format != "json":
+            typer.echo("\nUpdating vector index...")
+        try:
+            from bm25_index_tool.vector import VectorIndexer
+
+            # Recreate config from existing metadata
+            vector_config = VectorConfig(
+                model_id=vector_metadata_dict["embedding_model"],
+                chunk_size=vector_metadata_dict["chunk_size"],
+                chunk_overlap=vector_metadata_dict["chunk_overlap"],
+            )
+
+            vector_indexer = VectorIndexer(config=vector_config)
+
+            # Delete old vector index first
+            vector_indexer.delete_index(name)
+
+            # Create new vector index
+            vector_metadata = vector_indexer.create_index(name=name, files=files)
+
+            # Update metadata with new vector info
+            updated_metadata.vector_metadata = vector_metadata
+            indexer.update_metadata(name, updated_metadata)
+
+            if format != "json":
+                typer.echo("Vector index updated!")
+
+        except ImportError:
+            logger.warning("Vector dependencies not installed, skipping vector index update")
+            if format != "json":
+                typer.echo(
+                    "Warning: Vector dependencies not installed. Vector index not updated.",
+                    err=True,
+                )
+        except Exception as e:
+            logger.exception("Failed to update vector index")
+            if format != "json":
+                typer.echo(f"Warning: Vector index update failed: {e}", err=True)
+
+    elapsed = time.time() - start_time
+    logger.info("Index updated successfully in %.2fs", elapsed)
+
+    # Format output
+    if format == "json":
+        result: dict[str, str | int | float] = {
+            "status": "success",
+            "index": name,
+            "file_count": updated_metadata.file_count,
+            "elapsed_seconds": round(elapsed, 2),
+        }
+        if updated_metadata.vector_metadata:
+            result["chunk_count"] = updated_metadata.vector_metadata.chunk_count
+        typer.echo(json.dumps(result, indent=2))
+    else:
+        typer.echo(f"\nIndex '{name}' updated successfully!")
+        typer.echo(f"Files indexed: {updated_metadata.file_count}")
+        if updated_metadata.vector_metadata:
+            typer.echo(f"Chunks: {updated_metadata.vector_metadata.chunk_count}")
+        typer.echo(f"Time: {elapsed:.2f}s")

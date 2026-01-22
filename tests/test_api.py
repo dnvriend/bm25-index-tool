@@ -35,20 +35,12 @@ def temp_docs_dir():
 
 @pytest.fixture
 def client():
-    """Create a BM25Client instance."""
-    client_instance = BM25Client(enable_cache=True, enable_history=True)
-    yield client_instance
+    """Create a BM25Client instance.
 
-    # Cleanup: delete all test indices
-    try:
-        indices = client_instance.list_indices()
-        for idx in indices:
-            try:
-                client_instance.delete_index(idx["name"])
-            except Exception:
-                pass
-    except Exception:
-        pass
+    Note: Test isolation is handled by conftest.py which redirects
+    all storage to a temp directory. No cleanup needed here.
+    """
+    return BM25Client(enable_cache=True, enable_history=True)
 
 
 def test_client_initialization():

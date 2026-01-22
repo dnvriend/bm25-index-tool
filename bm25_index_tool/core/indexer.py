@@ -126,6 +126,28 @@ class BM25Indexer:
         logger.info("Index '%s' created successfully", name)
         return metadata
 
+    def update_metadata(self, name: str, metadata: IndexMetadata) -> None:
+        """Update metadata for an existing index.
+
+        Args:
+            name: Index name
+            metadata: Updated metadata
+
+        Raises:
+            ValueError: If index doesn't exist
+        """
+        if not self.registry.index_exists(name):
+            raise ValueError(f"Index '{name}' not found")
+
+        index_dir = get_index_dir(name)
+        metadata_path = index_dir / "metadata.json"
+
+        with open(metadata_path, "w") as f:
+            json.dump(metadata.model_dump(mode="json"), f, indent=2, default=str)
+
+        self.registry.add_index(name, metadata.model_dump(mode="json"))
+        logger.debug("Updated metadata for index '%s'", name)
+
     def update_index(
         self,
         name: str,
