@@ -115,6 +115,11 @@ def info_command(
                         lines.append(
                             f"  Files indexed: {indexed_docs:,}/{total_docs:,} ({pct:.1f}%)"
                         )
+                        if pct < 100:
+                            small_pct = 100 - pct
+                            lines.append(
+                                f"  Files too small: {small_pct:.1f}% (< chunk size, BM25 only)"
+                            )
             except Exception as e:
                 logger.debug("Failed to get indexed document count: %s", e)
         else:
@@ -132,15 +137,23 @@ def info_command(
                         # Show files indexed percentage
                         total_docs = storage.get_document_count()
                         indexed_docs = storage.get_indexed_document_count()
+                        pct = (indexed_docs / total_docs * 100) if total_docs > 0 else 0
                         if total_docs > 0:
-                            pct = (indexed_docs / total_docs) * 100
                             lines.append(
                                 f"  Files indexed: {indexed_docs:,}/{total_docs:,} ({pct:.1f}%)"
                             )
                         if progress:
                             status = progress.get("status", "unknown")
-                            lines.append(f"  Status: {status}")
-                        lines.append("  Hint: Run 'create --resume' to complete")
+                            if status == "completed":
+                                if pct < 100:
+                                    small_pct = 100 - pct
+                                    lines.append(
+                                        f"  Files too small: {small_pct:.1f}% "
+                                        "(< chunk size, BM25 only)"
+                                    )
+                            else:
+                                lines.append(f"  Status: {status}")
+                                lines.append("  Hint: Run 'create --resume' to complete")
                     else:
                         lines.append("\nVector Search: not available")
             except Exception as e:

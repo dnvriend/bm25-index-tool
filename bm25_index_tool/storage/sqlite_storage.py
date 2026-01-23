@@ -28,6 +28,34 @@ logger = get_logger(__name__)
 EMBEDDING_DIMENSIONS = 1024
 
 
+def tokenize_fts5_query(query: str) -> str:
+    """Tokenize a query string to match FTS5's unicode61 tokenizer behavior.
+
+    FTS5's default unicode61 tokenizer splits on non-alphanumeric characters
+    and lowercases tokens. For queries to match indexed content, we must
+    apply the same tokenization.
+
+    Example:
+        "vip-layerprd701.dc-ratingen.de" -> "vip layerprd701 dc ratingen de"
+
+    This ensures query tokens match index tokens, avoiding issues where:
+    - Indexing: vip-layer -> tokens [vip, layer]
+    - Query: vip-layer -> if not tokenized, searches for literal "vip-layer" (no match)
+
+    Args:
+        query: Raw search query from user
+
+    Returns:
+        Tokenized query matching FTS5 index tokenization
+    """
+    import re
+
+    # Split on non-alphanumeric characters (same as unicode61 tokenizer)
+    tokens = re.split(r"[^a-zA-Z0-9]+", query.lower())
+    # Filter empty tokens
+    return " ".join(t for t in tokens if t)
+
+
 def _serialize_float32(vector: Sequence[float]) -> bytes:
     """Serialize a float vector to bytes for sqlite-vec."""
     return struct.pack(f"{len(vector)}f", *vector)
@@ -626,6 +654,10 @@ class SQLiteStorage:
         """
         cursor = self.conn.cursor()
 
+        # Tokenize query to match FTS5's unicode61 tokenizer behavior
+        tokenized_query = tokenize_fts5_query(query)
+        logger.debug("Tokenized query: %s -> %s", query, tokenized_query)
+
         # FTS5 bm25() returns negative scores (more negative = better match)
         # We negate to get positive scores where higher = better
         cursor.execute(
@@ -637,7 +669,7 @@ class SQLiteStorage:
             ORDER BY bm25(documents_fts)
             LIMIT ?
             """,
-            (query, top_k),
+            (tokenized_query, top_k),
         )
 
         results = []
