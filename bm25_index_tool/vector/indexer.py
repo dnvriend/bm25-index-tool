@@ -9,13 +9,14 @@ from __future__ import annotations
 import json
 import mimetypes
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from tqdm import tqdm  # type: ignore
 
 from bm25_index_tool.config.models import VectorConfig, VectorMetadata
 from bm25_index_tool.logging_config import get_logger
 from bm25_index_tool.storage.paths import get_sqlite_db_path
+from bm25_index_tool.storage.registry import IndexRegistry
 from bm25_index_tool.storage.sqlite_storage import SQLiteStorage, compute_file_hash
 from bm25_index_tool.vector.chunking import CharacterLimitChunker, TextChunker
 from bm25_index_tool.vector.embeddings import DIMENSIONS, MODEL_ID, BedrockEmbeddings
@@ -39,6 +40,42 @@ class VectorIndexer:
         """
         self.config = config or VectorConfig()
         self.image_processor = ImageProcessor()
+        self._registry = IndexRegistry()
+
+    def _update_registry_vector_metadata(
+        self,
+        name: str,
+        chunk_count: int,
+        total_tokens: int,
+        estimated_cost: float,
+    ) -> None:
+        """Update registry with current vector metadata.
+
+        Called after each batch to keep registry in sync with database.
+
+        Args:
+            name: Index name
+            chunk_count: Current number of indexed chunks
+            total_tokens: Total tokens processed so far
+            estimated_cost: Estimated cost so far
+        """
+        try:
+            existing = self._registry.get_index(name)
+            if existing:
+                # Update vector_metadata in registry
+                existing["vector_metadata"] = {
+                    "chunk_count": chunk_count,
+                    "embedding_model": MODEL_ID,
+                    "dimensions": DIMENSIONS,
+                    "chunk_size": self.config.chunk_size,
+                    "chunk_overlap": self.config.chunk_overlap,
+                    "total_tokens": total_tokens,
+                    "estimated_cost_usd": estimated_cost,
+                }
+                self._registry.update_index(name, existing)
+                logger.debug("Updated registry with %d chunks", chunk_count)
+        except Exception as e:
+            logger.warning("Failed to update registry: %s", e)
 
     def _determine_mime_type(self, file_path: Path) -> str:
         """Determine MIME type of a file.
@@ -66,6 +103,7 @@ class VectorIndexer:
         name: str,
         files: list[Path],
         show_progress: bool = True,
+        resume: bool = False,
     ) -> VectorMetadata:
         """Create a SQLite vector index from files.
 
@@ -73,6 +111,7 @@ class VectorIndexer:
             name: Index name
             files: List of files to index
             show_progress: Show progress bar
+            resume: If True, resume from previous incomplete indexing
 
         Returns:
             VectorMetadata with index statistics
@@ -80,7 +119,10 @@ class VectorIndexer:
         Raises:
             VectorSearchError: If index creation fails
         """
-        logger.info("Creating vector index '%s' from %d files", name, len(files))
+        if resume:
+            logger.info("Resuming vector index '%s' from %d files", name, len(files))
+        else:
+            logger.info("Creating vector index '%s' from %d files", name, len(files))
 
         # Open SQLite storage
         storage = SQLiteStorage(name)
@@ -177,47 +219,115 @@ class VectorIndexer:
                 logger.info("Created %d chunks from text files", len(chunks))
 
                 if chunks:
-                    # Generate embeddings for text chunks
-                    logger.info("Generating embeddings for text chunks...")
-                    chunk_texts = [chunk.text for chunk in chunks]
+                    # Check for resume - filter out already indexed chunks
+                    if resume:
+                        indexed_keys = storage.get_indexed_chunk_keys()
+                        if indexed_keys:
+                            original_count = len(chunks)
+                            # Filter chunks that aren't already indexed
+                            chunks_to_process = []
+                            for chunk in chunks:
+                                maybe_doc_id = file_doc_ids.get(chunk.source_path)
+                                if maybe_doc_id is not None:
+                                    key = (maybe_doc_id, chunk.chunk_index)
+                                    if key not in indexed_keys:
+                                        chunks_to_process.append(chunk)
+                            chunks = chunks_to_process
+                            skipped = original_count - len(chunks)
+                            total_chunks = len(indexed_keys)  # Already indexed count
+                            logger.info(
+                                "Resuming: skipping %d already indexed chunks, %d remaining",
+                                skipped,
+                                len(chunks),
+                            )
 
-                    if show_progress:
-                        batch_size = 50
-                        all_embeddings: list[list[float]] = []
-
-                        for i in tqdm(
-                            range(0, len(chunk_texts), batch_size), desc="Embedding text"
-                        ):
-                            batch = chunk_texts[i : i + batch_size]
-                            batch_embeddings = embeddings_client.embed_texts(batch)
-                            all_embeddings.extend(batch_embeddings)
+                    if not chunks:
+                        logger.info("All chunks already indexed, nothing to do")
                     else:
-                        all_embeddings = embeddings_client.embed_texts(chunk_texts)
+                        # Process chunks in batches: embed + store immediately
+                        logger.info("Embedding and storing %d text chunks...", len(chunks))
+                        batch_size = 50
+                        total_batches = (len(chunks) + batch_size - 1) // batch_size
 
-                    # Add chunks with embeddings to storage
-                    logger.info("Storing %d text chunks...", len(chunks))
-                    chunk_iterator = (
-                        tqdm(enumerate(chunks), total=len(chunks), desc="Storing chunks")
-                        if show_progress
-                        else enumerate(chunks)
-                    )
+                        # Store initial progress state
+                        storage.set_metadata(
+                            "indexing_progress",
+                            json.dumps(
+                                {
+                                    "status": "in_progress",
+                                    "total_chunks": len(chunks) + total_chunks,
+                                    "indexed_chunks": total_chunks,
+                                    "current_batch": 0,
+                                    "total_batches": total_batches,
+                                }
+                            ),
+                        )
 
-                    for idx, chunk in chunk_iterator:
-                        if idx < len(all_embeddings):
-                            maybe_doc_id = file_doc_ids.get(chunk.source_path)
-                            if maybe_doc_id is not None:
-                                doc_id = maybe_doc_id
-                                storage.add_chunk(
-                                    document_id=doc_id,
-                                    chunk_index=chunk.chunk_index,
-                                    chunk_type="text",
-                                    text=chunk.text,
-                                    start_word=chunk.start_word,
-                                    end_word=chunk.end_word,
-                                    word_count=chunk.word_count,
-                                    embedding=all_embeddings[idx],
-                                )
-                                total_chunks += 1
+                        # Create progress bar for total chunks
+                        progress_bar = (
+                            tqdm(total=len(chunks), desc="Processing chunks")
+                            if show_progress
+                            else None
+                        )
+
+                        for batch_num, i in enumerate(range(0, len(chunks), batch_size)):
+                            batch_chunks = chunks[i : i + batch_size]
+                            batch_texts = [c.text for c in batch_chunks]
+
+                            # Generate embeddings for this batch
+                            batch_embeddings = embeddings_client.embed_texts(batch_texts)
+
+                            # Prepare batch data for storage
+                            chunks_data: list[dict[str, Any]] = []
+                            for idx, chunk in enumerate(batch_chunks):
+                                maybe_doc_id = file_doc_ids.get(chunk.source_path)
+                                if maybe_doc_id is not None and idx < len(batch_embeddings):
+                                    chunks_data.append(
+                                        {
+                                            "document_id": maybe_doc_id,
+                                            "chunk_index": chunk.chunk_index,
+                                            "chunk_type": "text",
+                                            "text": chunk.text,
+                                            "start_word": chunk.start_word,
+                                            "end_word": chunk.end_word,
+                                            "word_count": chunk.word_count,
+                                            "embedding": batch_embeddings[idx],
+                                        }
+                                    )
+
+                            # Store batch immediately
+                            if chunks_data:
+                                storage.add_chunks_batch(chunks_data)
+                                total_chunks += len(chunks_data)
+
+                            # Update progress in metadata
+                            storage.set_metadata(
+                                "indexing_progress",
+                                json.dumps(
+                                    {
+                                        "status": "in_progress",
+                                        "total_chunks": len(chunks),
+                                        "indexed_chunks": total_chunks,
+                                        "current_batch": batch_num + 1,
+                                        "total_batches": total_batches,
+                                    }
+                                ),
+                            )
+
+                            # Update registry with current state
+                            self._update_registry_vector_metadata(
+                                name=name,
+                                chunk_count=total_chunks,
+                                total_tokens=embeddings_client.total_tokens,
+                                estimated_cost=embeddings_client.get_estimated_cost(),
+                            )
+
+                            # Update progress bar
+                            if progress_bar:
+                                progress_bar.update(len(batch_chunks))
+
+                        if progress_bar:
+                            progress_bar.close()
 
             # Process image files: generate embeddings
             if image_files:
@@ -289,6 +399,18 @@ class VectorIndexer:
             }
 
             storage.set_metadata("vector_metadata", json.dumps(metadata_dict))
+
+            # Mark indexing as complete
+            storage.set_metadata(
+                "indexing_progress",
+                json.dumps(
+                    {
+                        "status": "completed",
+                        "total_chunks": total_chunks,
+                        "indexed_chunks": total_chunks,
+                    }
+                ),
+            )
 
             # Create metadata object
             metadata = VectorMetadata(

@@ -14,7 +14,7 @@ import struct
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from bm25_index_tool.logging_config import get_logger
 from bm25_index_tool.storage.paths import ensure_config_dir, get_index_dir, get_sqlite_db_path
@@ -236,6 +236,11 @@ class SQLiteStorage:
         self.conn.commit()
         logger.info("Database schema created for index '%s'", self.index_name)
 
+    def commit(self) -> None:
+        """Commit current transaction."""
+        if self._conn is not None:
+            self._conn.commit()
+
     def close(self) -> None:
         """Close database connection."""
         if self._conn is not None:
@@ -263,6 +268,8 @@ class SQLiteStorage:
     ) -> int:
         """Add a document to the index.
 
+        If a document with the same path already exists, returns the existing ID.
+
         Args:
             path: Full path to the document
             filename: Filename only
@@ -274,8 +281,17 @@ class SQLiteStorage:
         Returns:
             Document ID
         """
-        now = datetime.now(UTC).isoformat()
         cursor = self.conn.cursor()
+
+        # Check if document already exists
+        cursor.execute("SELECT id FROM documents WHERE path = ?", (path,))
+        existing = cursor.fetchone()
+        if existing:
+            existing_id: int = existing["id"]
+            logger.debug("Document already exists, returning existing ID: %s", path)
+            return existing_id
+
+        now = datetime.now(UTC).isoformat()
         cursor.execute(
             """
             INSERT INTO documents
@@ -411,6 +427,17 @@ class SQLiteStorage:
         row = cursor.fetchone()
         return row["count"] if row else 0
 
+    def get_indexed_document_count(self) -> int:
+        """Get number of documents that have vector embeddings.
+
+        Returns:
+            Count of distinct documents with chunks
+        """
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT COUNT(DISTINCT document_id) as count FROM chunks")
+        row = cursor.fetchone()
+        return row["count"] if row else 0
+
     def get_all_paths_with_hashes(self) -> dict[str, str]:
         """Get all document paths with their MD5 hashes.
 
@@ -471,6 +498,64 @@ class SQLiteStorage:
 
         self.conn.commit()
         return chunk_id
+
+    def add_chunks_batch(
+        self,
+        chunks_data: list[dict[str, Any]],
+        commit: bool = True,
+    ) -> list[int]:
+        """Add multiple chunks in a single transaction.
+
+        Args:
+            chunks_data: List of dicts with keys:
+                - document_id: int
+                - chunk_index: int
+                - chunk_type: str ('text' or 'image')
+                - text: str | None
+                - start_word: int | None
+                - end_word: int | None
+                - word_count: int | None
+                - embedding: list[float] | None
+            commit: Whether to commit after batch (default True)
+
+        Returns:
+            List of chunk IDs
+        """
+        cursor = self.conn.cursor()
+        chunk_ids: list[int] = []
+
+        for chunk in chunks_data:
+            cursor.execute(
+                """
+                INSERT INTO chunks
+                    (document_id, chunk_index, chunk_type, text, start_word, end_word, word_count)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    chunk["document_id"],
+                    chunk["chunk_index"],
+                    chunk["chunk_type"],
+                    chunk.get("text"),
+                    chunk.get("start_word"),
+                    chunk.get("end_word"),
+                    chunk.get("word_count"),
+                ),
+            )
+            chunk_id = cursor.lastrowid or 0
+            chunk_ids.append(chunk_id)
+
+            # Add embedding if provided and vec extension is loaded
+            embedding = chunk.get("embedding")
+            if embedding is not None and self._vec_loaded:
+                cursor.execute(
+                    "INSERT INTO chunks_vec (rowid, embedding) VALUES (?, ?)",
+                    (chunk_id, _serialize_float32(embedding)),
+                )
+
+        if commit:
+            self.conn.commit()
+
+        return chunk_ids
 
     def delete_chunks_for_document(self, document_id: int) -> int:
         """Delete all chunks for a document.
@@ -670,6 +755,35 @@ class SQLiteStorage:
         cursor = self.conn.cursor()
         cursor.execute("SELECT key, value FROM metadata")
         return {row["key"]: row["value"] for row in cursor.fetchall()}
+
+    def get_indexed_chunk_keys(self) -> set[tuple[int, int]]:
+        """Get set of (document_id, chunk_index) pairs for already indexed chunks.
+
+        Returns:
+            Set of (document_id, chunk_index) tuples
+        """
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT document_id, chunk_index FROM chunks")
+        return {(row["document_id"], row["chunk_index"]) for row in cursor.fetchall()}
+
+    def get_indexing_progress(self) -> dict[str, Any] | None:
+        """Get indexing progress status.
+
+        Returns:
+            Dict with progress info or None if not found:
+                - status: 'in_progress' or 'completed'
+                - total_chunks: total chunks to process
+                - indexed_chunks: chunks already indexed
+                - current_batch: current batch number (if in_progress)
+                - total_batches: total batches (if in_progress)
+        """
+        import json
+
+        progress_json = self.get_metadata("indexing_progress")
+        if progress_json:
+            result: dict[str, Any] = json.loads(progress_json)
+            return result
+        return None
 
 
 def compute_file_hash(file_path: Path) -> str:

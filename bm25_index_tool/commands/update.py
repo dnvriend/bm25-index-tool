@@ -43,6 +43,14 @@ def update_command(
         bool,
         typer.Option("--reindex", help="Full rebuild instead of incremental update"),
     ] = False,
+    no_gitignore: Annotated[
+        bool,
+        typer.Option("--no-gitignore", help="Disable .gitignore respect"),
+    ] = False,
+    no_ignore: Annotated[
+        bool,
+        typer.Option("--no-ignore", help="Disable .bm25ignore respect"),
+    ] = False,
 ) -> None:
     """Update an existing BM25 index with current files.
 
@@ -113,7 +121,11 @@ def update_command(
 
     # Discover files
     try:
-        files = discover_files(glob_pattern, respect_gitignore=True)
+        files = discover_files(
+            glob_pattern,
+            respect_gitignore=not no_gitignore,
+            respect_bm25ignore=not no_ignore,
+        )
         logger.info("Found %d files to re-index", len(files))
         if format != "json":
             typer.echo(f"Found {len(files)} files")

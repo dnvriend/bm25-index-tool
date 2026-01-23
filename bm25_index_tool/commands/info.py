@@ -76,8 +76,11 @@ def info_command(
         output = json.dumps(metadata, indent=2)
     else:
         # Simple format
+        from bm25_index_tool.storage.paths import get_sqlite_db_path
+
         lines = []
         lines.append(f"\nIndex: {metadata['name']}")
+        lines.append(f"Location: {get_sqlite_db_path(name)}")
         lines.append(f"Created: {metadata['created_at']}")
         lines.append(f"Files: {metadata['file_count']:,}")
         lines.append(f"Pattern: {metadata['glob_pattern']}")
@@ -100,8 +103,49 @@ def info_command(
             lines.append(f"  Chunk Size: {vector_metadata['chunk_size']} words")
             lines.append(f"  Chunk Overlap: {vector_metadata['chunk_overlap']} words")
             lines.append(f"  Estimated Cost: ${vector_metadata['estimated_cost_usd']:.4f}")
+            # Show files indexed percentage
+            try:
+                from bm25_index_tool.storage.sqlite_storage import SQLiteStorage
+
+                with SQLiteStorage(name) as storage:
+                    total_docs = storage.get_document_count()
+                    indexed_docs = storage.get_indexed_document_count()
+                    if total_docs > 0:
+                        pct = (indexed_docs / total_docs) * 100
+                        lines.append(
+                            f"  Files indexed: {indexed_docs:,}/{total_docs:,} ({pct:.1f}%)"
+                        )
+            except Exception as e:
+                logger.debug("Failed to get indexed document count: %s", e)
         else:
-            lines.append("\nVector Search: not available")
+            # Check database directly for partial/interrupted vector indexing
+            try:
+                from bm25_index_tool.storage.sqlite_storage import SQLiteStorage
+
+                with SQLiteStorage(name) as storage:
+                    chunk_count = storage.get_chunk_count()
+                    progress = storage.get_indexing_progress()
+
+                    if chunk_count > 0:
+                        lines.append("\nVector Search: partial (incomplete)")
+                        lines.append(f"  Chunks indexed: {chunk_count:,}")
+                        # Show files indexed percentage
+                        total_docs = storage.get_document_count()
+                        indexed_docs = storage.get_indexed_document_count()
+                        if total_docs > 0:
+                            pct = (indexed_docs / total_docs) * 100
+                            lines.append(
+                                f"  Files indexed: {indexed_docs:,}/{total_docs:,} ({pct:.1f}%)"
+                            )
+                        if progress:
+                            status = progress.get("status", "unknown")
+                            lines.append(f"  Status: {status}")
+                        lines.append("  Hint: Run 'create --resume' to complete")
+                    else:
+                        lines.append("\nVector Search: not available")
+            except Exception as e:
+                logger.debug("Failed to check vector index state: %s", e)
+                lines.append("\nVector Search: not available")
 
         output = "\n".join(lines)
 

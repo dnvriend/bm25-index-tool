@@ -112,6 +112,31 @@ def natural_sort_key(path: Path) -> tuple[float, str]:
     return (float("inf"), filename)
 
 
+def load_ignore_patterns(base_dir: Path, filename: str) -> pathspec.PathSpec | None:
+    """Load ignore patterns from a file (gitignore syntax).
+
+    Args:
+        base_dir: Directory to search for ignore file
+        filename: Name of ignore file (e.g., '.gitignore', '.bm25ignore')
+
+    Returns:
+        PathSpec instance or None if file not found
+    """
+    ignore_path = base_dir / filename
+    if not ignore_path.exists():
+        return None
+
+    try:
+        with open(ignore_path) as f:
+            patterns = f.read().splitlines()
+            spec = pathspec.PathSpec.from_lines("gitwildmatch", patterns)
+            logger.debug("Loaded %d patterns from %s", len(patterns), ignore_path)
+            return spec
+    except Exception as e:
+        logger.warning("Failed to load %s from %s: %s", filename, ignore_path, e)
+        return None
+
+
 def load_gitignore_patterns(base_dir: Path) -> pathspec.PathSpec | None:
     """Load .gitignore patterns from a directory.
 
@@ -121,26 +146,51 @@ def load_gitignore_patterns(base_dir: Path) -> pathspec.PathSpec | None:
     Returns:
         PathSpec instance or None if no .gitignore found
     """
-    gitignore_path = base_dir / ".gitignore"
-    if not gitignore_path.exists():
-        return None
+    return load_ignore_patterns(base_dir, ".gitignore")
 
+
+def load_bm25ignore_patterns(base_dir: Path) -> pathspec.PathSpec | None:
+    """Load .bm25ignore patterns from a directory.
+
+    Args:
+        base_dir: Directory to search for .bm25ignore
+
+    Returns:
+        PathSpec instance or None if no .bm25ignore found
+    """
+    return load_ignore_patterns(base_dir, ".bm25ignore")
+
+
+def is_in_git_directory(path: Path, base_dir: Path) -> bool:
+    """Check if a path is inside a .git directory.
+
+    Args:
+        path: Path to check
+        base_dir: Base directory for relative path calculation
+
+    Returns:
+        True if path is inside .git directory
+    """
     try:
-        with open(gitignore_path) as f:
-            patterns = f.read().splitlines()
-            spec = pathspec.PathSpec.from_lines("gitwildmatch", patterns)
-            logger.debug("Loaded %d gitignore patterns from %s", len(patterns), gitignore_path)
-            return spec
-    except Exception as e:
-        logger.warning("Failed to load .gitignore from %s: %s", gitignore_path, e)
-        return None
+        rel_path = path.relative_to(base_dir)
+        parts = rel_path.parts
+        return ".git" in parts
+    except ValueError:
+        # path is not relative to base_dir, check absolute
+        return ".git" in path.parts
 
 
-def discover_files(pattern: str, respect_gitignore: bool = True) -> list[Path]:
+def discover_files(
+    pattern: str,
+    respect_gitignore: bool = True,
+    respect_bm25ignore: bool = True,
+) -> list[Path]:
     """Discover files matching glob pattern.
 
     Supports tilde expansion (~, ~user), environment variables ($VAR, ${VAR}),
     brace expansion ({md,txt}), and standard glob patterns (*, **, ?).
+
+    Always excludes .git directories (hardcoded for safety).
 
     Args:
         pattern: Glob pattern supporting:
@@ -151,6 +201,7 @@ def discover_files(pattern: str, respect_gitignore: bool = True) -> list[Path]:
                  - Env vars: "$HOME/docs/**/*.md", "${PROJECT_DIR}/**/*.py"
                  - Brace expansion: "**/*.{md,txt,jpg}"
         respect_gitignore: If True, respect .gitignore files
+        respect_bm25ignore: If True, respect .bm25ignore files
 
     Returns:
         Sorted list of Path objects
@@ -176,7 +227,9 @@ def discover_files(pattern: str, respect_gitignore: bool = True) -> list[Path]:
         all_paths: set[Path] = set()
         for sub_pattern in patterns:
             try:
-                sub_paths = _discover_files_single(sub_pattern, respect_gitignore)
+                sub_paths = _discover_files_single(
+                    sub_pattern, respect_gitignore, respect_bm25ignore
+                )
                 all_paths.update(sub_paths)
             except ValueError:
                 # Pattern found no files, continue with others
@@ -190,15 +243,20 @@ def discover_files(pattern: str, respect_gitignore: bool = True) -> list[Path]:
         return paths
 
     # Single pattern - use existing logic
-    return _discover_files_single(pattern, respect_gitignore)
+    return _discover_files_single(pattern, respect_gitignore, respect_bm25ignore)
 
 
-def _discover_files_single(pattern: str, respect_gitignore: bool = True) -> list[Path]:
+def _discover_files_single(
+    pattern: str,
+    respect_gitignore: bool = True,
+    respect_bm25ignore: bool = True,
+) -> list[Path]:
     """Discover files matching a single glob pattern (no brace expansion).
 
     Args:
         pattern: Glob pattern (already expanded)
         respect_gitignore: If True, respect .gitignore files
+        respect_bm25ignore: If True, respect .bm25ignore files
 
     Returns:
         Sorted list of Path objects
@@ -268,6 +326,13 @@ def _discover_files_single(pattern: str, respect_gitignore: bool = True) -> list
         logger.error("No files found matching: %s", pattern)
         raise ValueError(f"No files found matching: {pattern}")
 
+    # Always filter out .git directories (hardcoded for safety)
+    original_count = len(paths)
+    paths = [p for p in paths if not is_in_git_directory(p, base_dir)]
+    git_filtered = original_count - len(paths)
+    if git_filtered > 0:
+        logger.debug("Filtered out %d files in .git directories", git_filtered)
+
     # Apply .gitignore filtering
     if respect_gitignore:
         gitignore_spec = load_gitignore_patterns(base_dir)
@@ -279,6 +344,18 @@ def _discover_files_single(pattern: str, respect_gitignore: bool = True) -> list
             filtered_count = original_count - len(paths)
             if filtered_count > 0:
                 logger.debug("Filtered out %d files via .gitignore", filtered_count)
+
+    # Apply .bm25ignore filtering
+    if respect_bm25ignore:
+        bm25ignore_spec = load_bm25ignore_patterns(base_dir)
+        if bm25ignore_spec:
+            original_count = len(paths)
+            paths = [
+                p for p in paths if not bm25ignore_spec.match_file(str(p.relative_to(base_dir)))
+            ]
+            filtered_count = original_count - len(paths)
+            if filtered_count > 0:
+                logger.debug("Filtered out %d files via .bm25ignore", filtered_count)
 
     if not paths:
         logger.error("No files remaining after filtering: %s", pattern)

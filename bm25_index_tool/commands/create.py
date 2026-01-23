@@ -57,6 +57,10 @@ def create_command(
         bool,
         typer.Option("--no-gitignore", help="Disable .gitignore respect"),
     ] = False,
+    no_ignore: Annotated[
+        bool,
+        typer.Option("--no-ignore", help="Disable .bm25ignore respect"),
+    ] = False,
     chunk_size: Annotated[
         int,
         typer.Option("--chunk-size", help="Words per chunk for vector search"),
@@ -68,6 +72,10 @@ def create_command(
     no_vector: Annotated[
         bool,
         typer.Option("--no-vector", help="Skip vector index creation"),
+    ] = False,
+    resume: Annotated[
+        bool,
+        typer.Option("--resume", help="Resume interrupted vector indexing"),
     ] = False,
 ) -> None:
     """Create a new BM25 index from files matching a glob pattern.
@@ -117,6 +125,10 @@ def create_command(
     \b
         # Verbose: See detailed indexing progress
         bm25-index-tool create myindex --pattern "**/*.md" -vv
+
+    \b
+        # Resume: Continue interrupted vector indexing
+        bm25-index-tool create myindex --pattern "**/*.md" --resume
     """
     setup_logging(verbose)
     logger.info("Creating index: %s", name)
@@ -157,9 +169,13 @@ def create_command(
         typer.echo("Stemmer: disabled")
 
     # Discover files
-    logger.debug("respect_gitignore=%s", not no_gitignore)
+    logger.debug("respect_gitignore=%s, respect_bm25ignore=%s", not no_gitignore, not no_ignore)
     try:
-        files = discover_files(absolute_pattern, respect_gitignore=not no_gitignore)
+        files = discover_files(
+            absolute_pattern,
+            respect_gitignore=not no_gitignore,
+            respect_bm25ignore=not no_ignore,
+        )
         logger.info("Found %d files to index", len(files))
         typer.echo(f"Found {len(files)} files")
     except ValueError as e:
@@ -173,39 +189,64 @@ def create_command(
         chunk_overlap=chunk_overlap,
     )
 
-    # Create BM25 index
+    # Create BM25 index (or load existing if --resume)
     logger.debug("Initializing BM25Indexer")
     indexer = BM25Indexer()
-    try:
-        logger.info("Starting indexing process for %d files", len(files))
-        metadata = indexer.create_index(
-            name=name,
-            files=files,
-            params=params,
-            tokenization=tokenization,
-            glob_pattern=absolute_pattern,
-        )
+    metadata = None
 
-        typer.echo("\nBM25 index created!")
-        typer.echo(f"Files indexed: {metadata.file_count}")
+    # Check if index exists via registry
+    from bm25_index_tool.storage.registry import IndexRegistry
 
-    except ValueError as e:
-        logger.error("Index creation failed: %s", e)
-        typer.echo(f"Error: {e}", err=True)
-        raise typer.Exit(code=1)
-    except Exception as e:
-        logger.exception("Failed to create index")
-        typer.echo(f"Error: {e}", err=True)
-        raise typer.Exit(code=1)
+    registry = IndexRegistry()
+
+    if resume and registry.index_exists(name):
+        # Resume mode: load existing metadata and skip BM25 creation
+        logger.info("Resume mode: loading existing index metadata")
+        typer.echo("\nResume mode: BM25 index already exists, skipping...")
+        existing_metadata = registry.get_index(name)
+        if existing_metadata:
+            from bm25_index_tool.config.models import IndexMetadata
+
+            metadata = IndexMetadata(**existing_metadata)
+        else:
+            logger.error("Failed to load existing metadata for resume")
+            typer.echo("Error: Failed to load existing index metadata", err=True)
+            raise typer.Exit(code=1)
+    else:
+        # Normal create mode
+        try:
+            logger.info("Starting indexing process for %d files", len(files))
+            metadata = indexer.create_index(
+                name=name,
+                files=files,
+                params=params,
+                tokenization=tokenization,
+                glob_pattern=absolute_pattern,
+            )
+
+            typer.echo("\nBM25 index created!")
+            typer.echo(f"Files indexed: {metadata.file_count}")
+
+        except ValueError as e:
+            logger.error("Index creation failed: %s", e)
+            typer.echo(f"Error: {e}", err=True)
+            raise typer.Exit(code=1)
+        except Exception as e:
+            logger.exception("Failed to create index")
+            typer.echo(f"Error: {e}", err=True)
+            raise typer.Exit(code=1)
 
     # Create vector index (unless --no-vector)
     if not no_vector:
-        typer.echo("\nCreating vector index (Nova embeddings)...")
+        if resume:
+            typer.echo("\nResuming vector index (Nova embeddings)...")
+        else:
+            typer.echo("\nCreating vector index (Nova embeddings)...")
         try:
             from bm25_index_tool.vector import VectorIndexer
 
             vector_indexer = VectorIndexer(config=vector_config)
-            vector_metadata = vector_indexer.create_index(name=name, files=files)
+            vector_metadata = vector_indexer.create_index(name=name, files=files, resume=resume)
 
             # Update metadata with vector info
             metadata.vector_metadata = vector_metadata
