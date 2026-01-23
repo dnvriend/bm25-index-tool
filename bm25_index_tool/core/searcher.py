@@ -1,26 +1,24 @@
 """BM25 search functionality for BM25 index tool.
 
+Uses SQLite FTS5 for full-text search with BM25 ranking.
+
 Note: This code was generated with assistance from AI coding tools
 and has been reviewed and tested by a human.
 """
 
 from typing import Any
 
-import bm25s  # type: ignore
-import Stemmer  # type: ignore
-
-from bm25_index_tool.config.models import IndexMetadata
 from bm25_index_tool.core.fragments import extract_fragments
 from bm25_index_tool.core.merge_strategies import MergeStrategy, RRFMergeStrategy
 from bm25_index_tool.logging_config import get_logger
-from bm25_index_tool.storage.paths import get_index_dir
 from bm25_index_tool.storage.registry import IndexRegistry
+from bm25_index_tool.storage.sqlite_storage import SQLiteStorage
 
 logger = get_logger(__name__)
 
 
 class BM25Searcher:
-    """Query BM25 indices."""
+    """Query BM25 indices using SQLite FTS5."""
 
     def __init__(self) -> None:
         """Initialize the BM25 searcher."""
@@ -50,56 +48,34 @@ class BM25Searcher:
         Raises:
             ValueError: If index doesn't exist
         """
-        # Load metadata
+        # Verify index exists in registry
         metadata_dict = self.registry.get_index(index_name)
         if not metadata_dict:
             logger.error("Index '%s' not found", index_name)
             raise ValueError(f"Index '{index_name}' not found")
 
-        metadata = IndexMetadata(**metadata_dict)
         logger.debug("Searching index '%s' for query: %s", index_name, query)
 
-        # Load index
-        index_dir = get_index_dir(index_name)
-        index_path = str(index_dir / "bm25s")
-
-        try:
-            retriever = bm25s.BM25.load(index_path, load_corpus=True, mmap=True)
-        except Exception as e:
-            logger.error("Failed to load index '%s': %s", index_name, e)
-            raise ValueError(f"Failed to load index '{index_name}': {e}")
-
-        # Prepare stemmer for query
-        stemmer = None
-        if metadata.tokenization.stemmer_enabled:
-            try:
-                stemmer = Stemmer.Stemmer(metadata.tokenization.stemmer)
-            except Exception as e:
-                logger.warning("Failed to initialize stemmer: %s", e)
-
-        # Tokenize query
-        query_tokens = bm25s.tokenize(
-            [query], stopwords=metadata.tokenization.stopwords, stemmer=stemmer
-        )
-
-        # Search (handle small corpus)
-        actual_k = min(top_k, metadata.file_count)
-        results, scores = retriever.retrieve(query_tokens, k=actual_k)
-
         # Parse query into terms for fragment extraction
-        query_terms = query.split()  # Simple split, works for most cases
+        query_terms = query.split()
+
+        # Search using SQLiteStorage
+        try:
+            with SQLiteStorage(index_name) as storage:
+                bm25_results = storage.search_bm25(query, top_k)
+        except Exception as e:
+            logger.error("Failed to search index '%s': %s", index_name, e)
+            raise ValueError(f"Failed to search index '{index_name}': {e}")
 
         # Format results
         output = []
-        for i in range(results.shape[1]):
-            doc = results[0, i]
-            score = float(scores[0, i])
-            content = doc.get("content", "")
+        for result in bm25_results:
+            content = result.content or ""
 
-            result = {
-                "path": doc["path"],
-                "name": doc["name"],
-                "score": score,
+            formatted = {
+                "path": result.path,
+                "name": result.filename,
+                "score": result.score,
                 "content": content,
             }
 
@@ -111,9 +87,9 @@ class BM25Searcher:
                     context_lines=context_lines,
                     max_fragments=3,
                 )
-                result["fragments"] = fragments
+                formatted["fragments"] = fragments
 
-            output.append(result)
+            output.append(formatted)
 
         logger.info("Found %d results for query in '%s'", len(output), index_name)
         return output

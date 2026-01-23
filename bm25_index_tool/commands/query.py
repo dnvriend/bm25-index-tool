@@ -401,6 +401,13 @@ def query_command(
                         top_k=top,
                     )
 
+                # Strip chunk_text from results unless --fragments is set
+                if not fragments:
+                    for r in results_cached:
+                        r.pop("chunk_text", None)
+                        r.pop("chunk_index", None)
+                        r.pop("chunk_type", None)
+
             except MissingModelMetadataError as e:
                 typer.echo(
                     f"Error: {e}\n\n"

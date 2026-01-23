@@ -4,19 +4,98 @@ Note: This code was generated with assistance from AI coding tools
 and has been reviewed and tested by a human.
 """
 
+import re
 from collections import Counter
 from typing import Any
 
-import bm25s  # type: ignore
-import Stemmer  # type: ignore
-
-from bm25_index_tool.config.models import IndexMetadata
 from bm25_index_tool.core.searcher import BM25Searcher
 from bm25_index_tool.logging_config import get_logger
-from bm25_index_tool.storage.paths import get_index_dir
 from bm25_index_tool.storage.registry import IndexRegistry
+from bm25_index_tool.storage.sqlite_storage import SQLiteStorage
 
 logger = get_logger(__name__)
+
+# Common English stopwords to filter out
+STOPWORDS = {
+    "a",
+    "an",
+    "the",
+    "and",
+    "or",
+    "but",
+    "in",
+    "on",
+    "at",
+    "to",
+    "for",
+    "of",
+    "with",
+    "by",
+    "from",
+    "as",
+    "is",
+    "was",
+    "are",
+    "were",
+    "been",
+    "be",
+    "have",
+    "has",
+    "had",
+    "do",
+    "does",
+    "did",
+    "will",
+    "would",
+    "could",
+    "should",
+    "may",
+    "might",
+    "must",
+    "shall",
+    "can",
+    "this",
+    "that",
+    "these",
+    "those",
+    "i",
+    "you",
+    "he",
+    "she",
+    "it",
+    "we",
+    "they",
+    "what",
+    "which",
+    "who",
+    "whom",
+    "when",
+    "where",
+    "why",
+    "how",
+    "all",
+    "each",
+    "every",
+    "both",
+    "few",
+    "more",
+    "most",
+    "other",
+    "some",
+    "such",
+    "no",
+    "nor",
+    "not",
+    "only",
+    "own",
+    "same",
+    "so",
+    "than",
+    "too",
+    "very",
+    "just",
+    "also",
+}
 
 
 class RelatedDocumentFinder:
@@ -62,49 +141,31 @@ class RelatedDocumentFinder:
         Raises:
             ValueError: If index or document doesn't exist
         """
-        # Load index metadata
-        metadata_dict = self.registry.get_index(index_name)
-        if not metadata_dict:
+        # Check if index exists
+        if not self.registry.index_exists(index_name):
             logger.error("Index '%s' not found", index_name)
             raise ValueError(f"Index '{index_name}' not found")
 
-        metadata = IndexMetadata(**metadata_dict)
         logger.info("Finding documents related to '%s' in index '%s'", document_path, index_name)
 
-        # Load index
-        index_dir = get_index_dir(index_name)
-        index_path = str(index_dir / "bm25s")
+        # Find the source document
+        with SQLiteStorage(index_name) as storage:
+            source_doc = storage.get_document(document_path)
 
-        try:
-            retriever = bm25s.BM25.load(index_path, load_corpus=True, mmap=True)
-        except Exception as e:
-            logger.error("Failed to load index '%s': %s", index_name, e)
-            raise ValueError(f"Failed to load index '{index_name}': {e}")
+            if source_doc is None:
+                logger.error("Document '%s' not found in index '%s'", document_path, index_name)
+                raise ValueError(f"Document '{document_path}' not found in index '{index_name}'")
 
-        # Find the source document in the corpus
-        source_doc = None
-        corpus = retriever.corpus
-
-        for doc in corpus:
-            if doc["path"] == document_path:
-                source_doc = doc
-                break
-
-        if source_doc is None:
-            logger.error("Document '%s' not found in index '%s'", document_path, index_name)
-            raise ValueError(f"Document '{document_path}' not found in index '{index_name}'")
-
-        # Extract content
-        content = source_doc.get("content", "")
-        if not content:
-            logger.warning("Document '%s' has no content", document_path)
-            return []
+            # Get content
+            content = source_doc.content
+            if not content:
+                logger.warning("Document '%s' has no content", document_path)
+                return []
 
         # Extract top TF-IDF terms
         query_terms = self._extract_top_terms(
             content=content,
             num_terms=num_terms,
-            metadata=metadata,
         )
 
         if not query_terms:
@@ -137,52 +198,40 @@ class RelatedDocumentFinder:
         self,
         content: str,
         num_terms: int,
-        metadata: IndexMetadata,
     ) -> list[str]:
-        """Extract top N terms from document content using TF-IDF.
+        """Extract top N terms from document content using term frequency.
 
-        This is a simplified TF-IDF implementation that:
-        1. Tokenizes the content
-        2. Applies stemming if configured
+        This is a simplified TF implementation that:
+        1. Tokenizes the content (lowercase, alphanumeric only)
+        2. Filters out stopwords and short words
         3. Counts term frequencies
         4. Returns most frequent terms
 
         Args:
             content: Document content
             num_terms: Number of terms to extract
-            metadata: Index metadata with tokenization config
 
         Returns:
-            List of top terms (original form, not stemmed)
+            List of top terms
         """
-        # Prepare stemmer if enabled
-        stemmer = None
-        if metadata.tokenization.stemmer_enabled:
-            try:
-                stemmer = Stemmer.Stemmer(metadata.tokenization.stemmer)
-            except Exception as e:
-                logger.warning("Failed to initialize stemmer: %s", e)
+        # Simple tokenization: lowercase and extract words
+        tokens = re.findall(r"\b[a-z][a-z0-9]+\b", content.lower())
 
-        # Tokenize content
-        tokenized = bm25s.tokenize(
-            [content],
-            stopwords=metadata.tokenization.stopwords,
-            stemmer=stemmer,
-        )
+        # Filter out stopwords and very short tokens
+        filtered_tokens = [token for token in tokens if token not in STOPWORDS and len(token) > 2]
 
-        if not tokenized or len(tokenized) == 0 or len(tokenized[0]) == 0:
-            logger.warning("No tokens extracted from content")
+        if not filtered_tokens:
+            logger.warning("No tokens extracted from content after filtering")
             return []
 
-        # Get tokens (already processed with stopwords and stemming)
-        tokens = tokenized[0]
-
         # Count term frequencies
-        term_counts = Counter(tokens)
+        term_counts = Counter(filtered_tokens)
 
         # Get top N terms by frequency
         top_terms = [term for term, _count in term_counts.most_common(num_terms)]
 
-        logger.debug("Extracted %d top terms from %d total tokens", len(top_terms), len(tokens))
+        logger.debug(
+            "Extracted %d top terms from %d total tokens", len(top_terms), len(filtered_tokens)
+        )
 
         return top_terms

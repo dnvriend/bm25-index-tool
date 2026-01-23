@@ -21,8 +21,6 @@ from bm25_index_tool.logging_config import get_logger, setup_logging
 
 logger = get_logger(__name__)
 
-DEFAULT_EMBEDDING_MODEL = "amazon.nova-2-multimodal-embeddings-v1:0"
-
 app = typer.Typer()
 
 
@@ -59,10 +57,6 @@ def create_command(
         bool,
         typer.Option("--no-gitignore", help="Disable .gitignore respect"),
     ] = False,
-    model: Annotated[
-        str,
-        typer.Option("--model", help="Embedding model ID for vector search"),
-    ] = DEFAULT_EMBEDDING_MODEL,
     chunk_size: Annotated[
         int,
         typer.Option("--chunk-size", help="Words per chunk for vector search"),
@@ -71,14 +65,6 @@ def create_command(
         int,
         typer.Option("--chunk-overlap", help="Overlap words between chunks"),
     ] = 50,
-    dimensions: Annotated[
-        int,
-        typer.Option(
-            "--dimensions",
-            "-d",
-            help="Embedding dimensions (Nova: 256/512/1024/3072, Titan: 1024)",
-        ),
-    ] = 3072,
     no_vector: Annotated[
         bool,
         typer.Option("--no-vector", help="Skip vector index creation"),
@@ -87,7 +73,7 @@ def create_command(
     """Create a new BM25 index from files matching a glob pattern.
 
     Creates a full-text search index using the BM25 ranking algorithm. By default,
-    also creates a vector index for semantic search using AWS Bedrock embeddings.
+    also creates a vector index for semantic search using AWS Bedrock Nova embeddings.
 
     Examples:
 
@@ -104,18 +90,9 @@ def create_command(
         bm25-index-tool create vault --pattern "~/projects/obsidian/**/*.md"
 
     \b
-        # Custom embedding model
-        bm25-index-tool create vault --pattern "**/*.md" \
-            --model amazon.titan-embed-text-v2:0
-
-    \b
         # Custom chunk settings
         bm25-index-tool create docs --pattern "**/*.md" \\
             --chunk-size 500 --chunk-overlap 100
-
-    \b
-        # Custom dimensions (Nova supports 256, 512, 1024, 3072)
-        bm25-index-tool create compact --pattern "**/*.md" --dimensions 1024
 
     \b
         # Skip vector index (BM25 only)
@@ -192,10 +169,8 @@ def create_command(
 
     # Create vector config
     vector_config = VectorConfig(
-        model_id=model,
         chunk_size=chunk_size,
         chunk_overlap=chunk_overlap,
-        dimensions=dimensions,
     )
 
     # Create BM25 index
@@ -225,7 +200,7 @@ def create_command(
 
     # Create vector index (unless --no-vector)
     if not no_vector:
-        typer.echo(f"\nCreating vector index (model: {model})...")
+        typer.echo("\nCreating vector index (Nova embeddings)...")
         try:
             from bm25_index_tool.vector import VectorIndexer
 

@@ -9,12 +9,14 @@ from bm25_index_tool.vector.chunking import (
     Chunk,
     Chunker,
     ChunkerPipeline,
+    ImageChunk,
+    ImageChunker,
     TextChunker,
 )
 from bm25_index_tool.vector.embeddings import (
+    DIMENSIONS,
+    MODEL_ID,
     BedrockEmbeddings,
-    get_model_dimensions,
-    is_nova_model,
 )
 from bm25_index_tool.vector.errors import (
     AWSCredentialsError,
@@ -32,10 +34,12 @@ __all__ = [
     "Chunker",
     "ChunkerPipeline",
     "CharacterLimitChunker",
+    "ImageChunk",
+    "ImageChunker",
     "TextChunker",
     "BedrockEmbeddings",
-    "get_model_dimensions",
-    "is_nova_model",
+    "MODEL_ID",
+    "DIMENSIONS",
     "VectorIndexer",
     "VectorSearcher",
     "VectorSearchError",

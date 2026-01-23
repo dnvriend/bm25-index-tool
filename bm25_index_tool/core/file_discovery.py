@@ -15,6 +15,39 @@ from bm25_index_tool.logging_config import get_logger
 logger = get_logger(__name__)
 
 
+def expand_braces(pattern: str) -> list[str]:
+    """Expand brace patterns like {md,jpg,png} into multiple patterns.
+
+    Args:
+        pattern: Pattern potentially containing brace expansions
+
+    Returns:
+        List of expanded patterns
+
+    Examples:
+        "**/*.{md,txt}" -> ["**/*.md", "**/*.txt"]
+        "**/*.md" -> ["**/*.md"]
+        "{src,lib}/**/*.py" -> ["src/**/*.py", "lib/**/*.py"]
+    """
+    # Find brace pattern
+    match = re.search(r"\{([^{}]+)\}", pattern)
+    if not match:
+        return [pattern]
+
+    # Get the alternatives inside braces
+    alternatives = match.group(1).split(",")
+    prefix = pattern[: match.start()]
+    suffix = pattern[match.end() :]
+
+    # Recursively expand any remaining braces
+    expanded = []
+    for alt in alternatives:
+        sub_pattern = prefix + alt.strip() + suffix
+        expanded.extend(expand_braces(sub_pattern))
+
+    return expanded
+
+
 def expand_pattern_to_absolute(pattern: str) -> str:
     """Expand a glob pattern to an absolute path.
 
@@ -107,7 +140,7 @@ def discover_files(pattern: str, respect_gitignore: bool = True) -> list[Path]:
     """Discover files matching glob pattern.
 
     Supports tilde expansion (~, ~user), environment variables ($VAR, ${VAR}),
-    and standard glob patterns (*, **, ?).
+    brace expansion ({md,txt}), and standard glob patterns (*, **, ?).
 
     Args:
         pattern: Glob pattern supporting:
@@ -116,6 +149,7 @@ def discover_files(pattern: str, respect_gitignore: bool = True) -> list[Path]:
                  - Absolute: "/path/to/**/*.md"
                  - Tilde: "~/docs/**/*.md"
                  - Env vars: "$HOME/docs/**/*.md", "${PROJECT_DIR}/**/*.py"
+                 - Brace expansion: "**/*.{md,txt,jpg}"
         respect_gitignore: If True, respect .gitignore files
 
     Returns:
@@ -132,6 +166,46 @@ def discover_files(pattern: str, respect_gitignore: bool = True) -> list[Path]:
     # 2. Expand user home directory (~, ~user)
     pattern = os.path.expanduser(pattern)
     logger.debug("Expanded pattern: %s", pattern)
+
+    # 3. Expand brace patterns (e.g., {md,txt,jpg})
+    patterns = expand_braces(pattern)
+    if len(patterns) > 1:
+        logger.debug("Expanded to %d patterns: %s", len(patterns), patterns)
+
+        # Collect files from all patterns
+        all_paths: set[Path] = set()
+        for sub_pattern in patterns:
+            try:
+                sub_paths = _discover_files_single(sub_pattern, respect_gitignore)
+                all_paths.update(sub_paths)
+            except ValueError:
+                # Pattern found no files, continue with others
+                pass
+
+        if not all_paths:
+            raise ValueError(f"No files found matching: {pattern}")
+
+        paths = sorted(all_paths, key=natural_sort_key)
+        logger.info("Discovered %d files from %d patterns", len(paths), len(patterns))
+        return paths
+
+    # Single pattern - use existing logic
+    return _discover_files_single(pattern, respect_gitignore)
+
+
+def _discover_files_single(pattern: str, respect_gitignore: bool = True) -> list[Path]:
+    """Discover files matching a single glob pattern (no brace expansion).
+
+    Args:
+        pattern: Glob pattern (already expanded)
+        respect_gitignore: If True, respect .gitignore files
+
+    Returns:
+        Sorted list of Path objects
+
+    Raises:
+        ValueError: If no files match pattern
+    """
 
     # Parse glob pattern
     # Split the pattern into base directory and glob pattern

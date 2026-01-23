@@ -82,3 +82,15 @@ def get_chunks_path(name: str) -> Path:
         Path to ~/.config/bm25-index-tool/indices/{name}/chunks.json
     """
     return get_index_dir(name) / "chunks.json"
+
+
+def get_sqlite_db_path(name: str) -> Path:
+    """Get the path to the SQLite database for an index.
+
+    Args:
+        name: Name of the index
+
+    Returns:
+        Path to ~/.config/bm25-index-tool/indices/{name}/index.db
+    """
+    return get_index_dir(name) / "index.db"

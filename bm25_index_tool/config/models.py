@@ -70,10 +70,8 @@ class TokenizationConfig(BaseModel):
 class VectorConfig(BaseModel):
     """Vector index configuration."""
 
-    model_id: str = Field(default="amazon.nova-2-multimodal-embeddings-v1:0")
     chunk_size: int = Field(default=300, ge=50, le=2000)
     chunk_overlap: int = Field(default=50, ge=0, le=500)
-    dimensions: int = Field(default=3072, ge=256, le=4096)
     max_chunk_chars: int = Field(default=48000, ge=1000, le=100000)
 
 

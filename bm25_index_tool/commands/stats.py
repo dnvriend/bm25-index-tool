@@ -8,13 +8,12 @@ import json
 from pathlib import Path
 from typing import Annotated, Any
 
-import bm25s  # type: ignore
-import numpy as np
 import typer
 
 from bm25_index_tool.logging_config import get_logger, setup_logging
 from bm25_index_tool.storage.paths import get_index_dir
 from bm25_index_tool.storage.registry import IndexRegistry
+from bm25_index_tool.storage.sqlite_storage import SQLiteStorage
 
 logger = get_logger(__name__)
 
@@ -98,59 +97,46 @@ def _compute_detailed_stats(name: str, registry: IndexRegistry) -> dict[str, Any
     # Start with fast stats
     stats = _compute_fast_stats(name, registry)
 
-    # Load index for analysis
-    logger.debug("Loading index for detailed analysis")
-    index_dir = get_index_dir(name)
-    index_path = str(index_dir / "bm25s")
-    bm25s_retriever = bm25s.BM25.load(index_path, load_corpus=False, mmap=True)
+    # Load SQLite storage for detailed analysis
+    logger.debug("Loading SQLite database for detailed analysis")
 
-    # Extract BM25S internals
-    vocab = bm25s_retriever.vocab
-    scores_matrix = bm25s_retriever.scores
+    with SQLiteStorage(name) as storage:
+        # Document statistics
+        stats["document_count"] = storage.get_document_count()
+        stats["chunk_count"] = storage.get_chunk_count()
+        stats["has_vector_index"] = storage.has_vector_index()
 
-    # Vocabulary statistics
-    stats["vocabulary_size"] = len(vocab)
+        # Get all metadata from storage
+        storage_metadata = storage.get_all_metadata()
+        if storage_metadata:
+            stats["storage_metadata"] = storage_metadata
 
-    # Document length statistics
-    if hasattr(scores_matrix, "data"):
-        # Sparse matrix
-        doc_lengths = np.array(scores_matrix.sum(axis=1)).flatten()
-    else:
-        # Dense matrix
-        doc_lengths = scores_matrix.sum(axis=1)
+        # Get document type breakdown
+        cursor = storage.conn.cursor()
+        cursor.execute("""
+            SELECT mime_type, COUNT(*) as count
+            FROM documents
+            GROUP BY mime_type
+            ORDER BY count DESC
+        """)
+        mime_counts = {row["mime_type"]: row["count"] for row in cursor.fetchall()}
+        stats["document_types"] = mime_counts
 
-    stats["document_lengths"] = {
-        "min": float(doc_lengths.min()),
-        "max": float(doc_lengths.max()),
-        "mean": float(doc_lengths.mean()),
-        "median": float(np.median(doc_lengths)),
-    }
+        # Get chunk type breakdown
+        cursor.execute("""
+            SELECT chunk_type, COUNT(*) as count
+            FROM chunks
+            GROUP BY chunk_type
+            ORDER BY count DESC
+        """)
+        chunk_type_counts = {row["chunk_type"]: row["count"] for row in cursor.fetchall()}
+        stats["chunk_types"] = chunk_type_counts
 
-    # Term frequency statistics
-    if hasattr(scores_matrix, "data"):
-        # Sparse matrix - count non-zero entries per term
-        term_doc_freq = np.array((scores_matrix > 0).sum(axis=0)).flatten()
-    else:
-        # Dense matrix
-        term_doc_freq = (scores_matrix > 0).sum(axis=0)
-
-    # Top 20 terms by document frequency
-    top_indices = np.argsort(term_doc_freq)[::-1][:20]
-    top_terms = []
-    for idx in top_indices:
-        term = vocab[int(idx)]
-        freq = int(term_doc_freq[idx])
-        top_terms.append({"term": term, "document_frequency": freq})
-
-    stats["top_terms"] = top_terms
-
-    # Matrix sparsity
-    if hasattr(scores_matrix, "data"):
-        sparsity = 1.0 - (scores_matrix.nnz / (scores_matrix.shape[0] * scores_matrix.shape[1]))
-    else:
-        sparsity = 1.0 - (np.count_nonzero(scores_matrix) / scores_matrix.size)
-
-    stats["matrix_sparsity"] = float(sparsity)
+        # Get total content size
+        cursor.execute("SELECT SUM(file_size) as total FROM documents")
+        row = cursor.fetchone()
+        stats["total_content_bytes"] = row["total"] if row and row["total"] else 0
+        stats["total_content_formatted"] = _format_size(stats["total_content_bytes"])
 
     return stats
 
@@ -183,7 +169,7 @@ def stats_command(
     """Display index statistics and health metrics.
 
     Fast mode (default) shows metadata-based statistics instantly.
-    Detailed mode loads the index for term analysis and vocabulary stats.
+    Detailed mode loads the index for document and chunk analysis.
 
     Examples:
 
@@ -192,7 +178,7 @@ def stats_command(
         bm25-index-tool stats vault
 
     \b
-        # Detailed stats: Include vocabulary and term frequencies
+        # Detailed stats: Include document and chunk breakdown
         bm25-index-tool stats vault --detailed
 
     \b
@@ -200,7 +186,7 @@ def stats_command(
         bm25-index-tool stats vault --format json
 
     \b
-        # Detailed JSON: Full statistics with term analysis
+        # Detailed JSON: Full statistics with type breakdown
         bm25-index-tool stats vault -d -f json
 
     \b
@@ -213,10 +199,10 @@ def stats_command(
     \b
     Output (Detailed Mode):
         - All fast mode stats
-        - Vocabulary size
-        - Document length distribution (min/max/mean/median)
-        - Matrix sparsity
-        - Top 20 terms by document frequency
+        - Document count and chunk count
+        - Document type breakdown (by MIME type)
+        - Chunk type breakdown (text vs image)
+        - Vector index status
     """
     setup_logging(verbose)
     logger.info("Computing statistics for index: %s", name)
@@ -258,16 +244,20 @@ def stats_command(
         lines.append(f"  Stopwords: {stats['tokenization']['stopwords']}")
 
         if detailed:
-            lines.append(f"\nVocabulary Size: {stats['vocabulary_size']:,}")
-            lines.append("\nDocument Lengths:")
-            lines.append(f"  Min: {stats['document_lengths']['min']:.1f}")
-            lines.append(f"  Max: {stats['document_lengths']['max']:.1f}")
-            lines.append(f"  Mean: {stats['document_lengths']['mean']:.1f}")
-            lines.append(f"  Median: {stats['document_lengths']['median']:.1f}")
-            lines.append(f"\nMatrix Sparsity: {stats['matrix_sparsity']:.2%}")
-            lines.append("\nTop 20 Terms by Document Frequency:")
-            for term_info in stats["top_terms"]:
-                lines.append(f"  {term_info['term']}: {term_info['document_frequency']} docs")
+            lines.append(f"\nDocuments: {stats['document_count']:,}")
+            lines.append(f"Chunks: {stats['chunk_count']:,}")
+            lines.append(f"Vector Index: {'Yes' if stats['has_vector_index'] else 'No'}")
+            lines.append(f"Total Content: {stats['total_content_formatted']}")
+
+            if stats.get("document_types"):
+                lines.append("\nDocument Types:")
+                for mime_type, count in stats["document_types"].items():
+                    lines.append(f"  {mime_type}: {count}")
+
+            if stats.get("chunk_types"):
+                lines.append("\nChunk Types:")
+                for chunk_type, count in stats["chunk_types"].items():
+                    lines.append(f"  {chunk_type}: {count}")
 
         output = "\n".join(lines)
 

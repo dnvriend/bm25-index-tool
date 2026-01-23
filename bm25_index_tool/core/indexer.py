@@ -1,27 +1,26 @@
 """BM25 indexing functionality for BM25 index tool.
 
-Note: This code was generated with assistance from AI coding tools
-and has been reviewed and tested by a human.
+Uses SQLite FTS5 for full-text search with BM25 ranking.
 """
 
 import json
+import shutil
 from datetime import datetime
 from pathlib import Path
 
-import bm25s  # type: ignore
-import Stemmer  # type: ignore
 from tqdm import tqdm  # type: ignore
 
 from bm25_index_tool.config.models import BM25Params, IndexMetadata, TokenizationConfig
 from bm25_index_tool.logging_config import get_logger
 from bm25_index_tool.storage.paths import get_index_dir
 from bm25_index_tool.storage.registry import IndexRegistry
+from bm25_index_tool.storage.sqlite_storage import SQLiteStorage, compute_file_hash
 
 logger = get_logger(__name__)
 
 
 class BM25Indexer:
-    """Creates BM25 indices."""
+    """Creates BM25 indices using SQLite FTS5."""
 
     def __init__(self) -> None:
         """Initialize the BM25 indexer."""
@@ -40,8 +39,8 @@ class BM25Indexer:
         Args:
             name: Index name
             files: List of files to index
-            params: BM25 parameters
-            tokenization: Tokenization configuration
+            params: BM25 parameters (stored for compatibility, FTS5 uses defaults)
+            tokenization: Tokenization configuration (stored for compatibility)
             glob_pattern: Original glob pattern used
 
         Returns:
@@ -57,64 +56,59 @@ class BM25Indexer:
 
         logger.info("Creating index '%s' with %d files", name, len(files))
 
-        # Read file contents with progress bar
-        corpus_text = []
-        corpus_metadata = []
+        # Create SQLite storage
+        storage = SQLiteStorage(name)
+        storage.create_schema(with_vectors=False)
 
-        for file_path in tqdm(files, desc="Reading files", unit="file"):
+        # Store glob pattern in metadata
+        storage.set_metadata("glob_pattern", glob_pattern)
+
+        # Index files with progress bar
+        indexed_count = 0
+        for file_path in tqdm(files, desc="Indexing files", unit="file"):
             try:
+                # Read content
                 with open(file_path, encoding="utf-8", errors="ignore") as f:
                     content = f.read()
-                    corpus_text.append(content)
-                    corpus_metadata.append(
-                        {"path": str(file_path), "name": file_path.name, "content": content}
-                    )
+
+                # Compute MD5 hash
+                md5_hash = compute_file_hash(file_path)
+
+                # Get file size
+                file_size = file_path.stat().st_size
+
+                # Add document to storage
+                storage.add_document(
+                    path=str(file_path),
+                    filename=file_path.name,
+                    md5_hash=md5_hash,
+                    content=content,
+                    mime_type="text/plain",
+                    file_size=file_size,
+                )
+                indexed_count += 1
+
             except Exception as e:
-                logger.warning("Failed to read %s: %s", file_path, e)
+                logger.warning("Failed to index %s: %s", file_path, e)
                 continue
 
-        logger.debug("Read %d files successfully", len(corpus_text))
+        logger.debug("Indexed %d files successfully", indexed_count)
 
-        # Prepare stemmer
-        stemmer = None
-        if tokenization.stemmer_enabled:
-            try:
-                stemmer = Stemmer.Stemmer(tokenization.stemmer)
-                logger.debug("Using stemmer: %s", tokenization.stemmer)
-            except Exception as e:
-                logger.warning("Failed to initialize stemmer: %s", e)
-
-        # Tokenize corpus
-        logger.info("Tokenizing corpus...")
-        corpus_tokens = bm25s.tokenize(
-            corpus_text, stopwords=tokenization.stopwords, stemmer=stemmer
-        )
-        logger.debug("Tokenization complete")
-
-        # Create BM25 retriever
-        logger.info("Building BM25 index...")
-        retriever = bm25s.BM25(method=params.method, k1=params.k1, b=params.b)
-        retriever.index(corpus_tokens)
-        logger.debug("BM25 index built")
-
-        # Save index
-        index_dir = get_index_dir(name)
-        index_dir.mkdir(parents=True, exist_ok=True)
-
-        logger.info("Saving index to %s", index_dir)
-        retriever.save(str(index_dir / "bm25s"), corpus=corpus_metadata)
+        # Close storage connection
+        storage.close()
 
         # Create metadata
+        index_dir = get_index_dir(name)
         metadata = IndexMetadata(
             name=name,
             created_at=datetime.now(),
-            file_count=len(files),
+            file_count=indexed_count,
             glob_pattern=glob_pattern,
             bm25_params=params,
             tokenization=tokenization,
         )
 
-        # Save metadata
+        # Save metadata to JSON file
         metadata_path = index_dir / "metadata.json"
         with open(metadata_path, "w") as f:
             json.dump(metadata.model_dump(mode="json"), f, indent=2, default=str)
@@ -174,11 +168,16 @@ class BM25Indexer:
         existing_metadata = IndexMetadata(**existing_metadata_dict)
         logger.info("Updating index '%s' with %d files", name, len(files))
 
-        # Re-create index with same parameters
-        # First, remove from registry
+        # Delete old index directory
+        index_dir = get_index_dir(name)
+        if index_dir.exists():
+            shutil.rmtree(index_dir)
+            logger.debug("Removed old index directory: %s", index_dir)
+
+        # Remove from registry
         self.registry.remove_index(name)
 
-        # Create new index
+        # Create new index with same parameters
         try:
             metadata = self.create_index(
                 name=name,

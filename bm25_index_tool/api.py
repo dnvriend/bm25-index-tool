@@ -647,10 +647,9 @@ class BM25Client:
                 - tokenization: Tokenization config
 
             If detailed=True, also includes:
-                - vocabulary_size: Number of unique terms
-                - document_lengths: Min/max/mean/median document lengths
-                - matrix_sparsity: BM25 matrix sparsity
-                - top_terms: Top 20 terms by document frequency
+                - document_count: Number of documents in database
+                - chunk_count: Number of chunks (if vector index exists)
+                - has_vector_index: Whether vector index exists
 
         Raises:
             ValueError: If index doesn't exist
@@ -658,11 +657,9 @@ class BM25Client:
 
         Example:
             >>> stats = client.get_stats("docs", detailed=True)
-            >>> print(f"Vocabulary: {stats['vocabulary_size']:,} terms")
-            >>> print(f"Sparsity: {stats['matrix_sparsity']:.2%}")
+            >>> print(f"Documents: {stats['document_count']}")
         """
-        import bm25s  # type: ignore
-        import numpy as np
+        from bm25_index_tool.storage.sqlite_storage import SQLiteStorage
 
         logger.debug("Computing statistics for index: %s (detailed=%s)", name, detailed)
 
@@ -685,60 +682,16 @@ class BM25Client:
         }
 
         if detailed:
-            # Load index for detailed analysis
-            index_path = str(index_dir / "bm25s")
-            retriever = bm25s.BM25.load(index_path, load_corpus=False, mmap=True)
+            # Load SQLite storage for detailed statistics
+            with SQLiteStorage(name) as storage:
+                stats["document_count"] = storage.get_document_count()
+                stats["chunk_count"] = storage.get_chunk_count()
+                stats["has_vector_index"] = storage.has_vector_index()
 
-            # Check if retriever has vocab attribute (bm25s version compatibility)
-            if not hasattr(retriever, "vocab"):
-                logger.warning(
-                    "BM25 retriever doesn't have vocab attribute, skipping detailed stats"
-                )
-                return stats
-
-            vocab = retriever.vocab
-            scores_matrix = retriever.scores
-
-            # Vocabulary size
-            stats["vocabulary_size"] = len(vocab)
-
-            # Document lengths
-            if hasattr(scores_matrix, "data"):
-                doc_lengths = np.array(scores_matrix.sum(axis=1)).flatten()
-            else:
-                doc_lengths = scores_matrix.sum(axis=1)
-
-            stats["document_lengths"] = {
-                "min": float(doc_lengths.min()),
-                "max": float(doc_lengths.max()),
-                "mean": float(doc_lengths.mean()),
-                "median": float(np.median(doc_lengths)),
-            }
-
-            # Term frequency statistics
-            if hasattr(scores_matrix, "data"):
-                term_doc_freq = np.array((scores_matrix > 0).sum(axis=0)).flatten()
-            else:
-                term_doc_freq = (scores_matrix > 0).sum(axis=0)
-
-            # Top 20 terms
-            top_indices = np.argsort(term_doc_freq)[::-1][:20]
-            top_terms = []
-            for idx in top_indices:
-                term = vocab[int(idx)]
-                freq = int(term_doc_freq[idx])
-                top_terms.append({"term": term, "document_frequency": freq})
-
-            stats["top_terms"] = top_terms
-
-            # Matrix sparsity
-            if hasattr(scores_matrix, "data"):
-                total_elements = scores_matrix.shape[0] * scores_matrix.shape[1]
-                sparsity = 1.0 - (scores_matrix.nnz / total_elements)
-            else:
-                sparsity = 1.0 - (np.count_nonzero(scores_matrix) / scores_matrix.size)
-
-            stats["matrix_sparsity"] = float(sparsity)
+                # Get all metadata from storage
+                storage_metadata = storage.get_all_metadata()
+                if storage_metadata:
+                    stats["storage_metadata"] = storage_metadata
 
         return stats
 

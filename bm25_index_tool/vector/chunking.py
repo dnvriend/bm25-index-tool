@@ -29,6 +29,7 @@ class Chunk:
     start_word: int
     end_word: int
     word_count: int
+    chunk_type: str = "text"
 
     def to_dict(self) -> dict[str, str | int]:
         """Convert chunk to dictionary for serialization."""
@@ -39,6 +40,7 @@ class Chunk:
             "start_word": self.start_word,
             "end_word": self.end_word,
             "word_count": self.word_count,
+            "chunk_type": self.chunk_type,
         }
 
     @classmethod
@@ -51,6 +53,33 @@ class Chunk:
             start_word=int(data["start_word"]),
             end_word=int(data["end_word"]),
             word_count=int(data["word_count"]),
+            chunk_type=str(data.get("chunk_type", "text")),
+        )
+
+
+@dataclass
+class ImageChunk:
+    """A chunk representing an entire image for vector embedding."""
+
+    source_path: str
+    chunk_index: int = 0  # Always 0 for images (1 chunk per image)
+    chunk_type: str = "image"  # Distinguish from text chunks
+
+    def to_dict(self) -> dict[str, str | int]:
+        """Convert chunk to dictionary for serialization."""
+        return {
+            "source_path": self.source_path,
+            "chunk_index": self.chunk_index,
+            "chunk_type": self.chunk_type,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, str | int]) -> ImageChunk:
+        """Create ImageChunk from dictionary."""
+        return cls(
+            source_path=str(data["source_path"]),
+            chunk_index=int(data.get("chunk_index", 0)),
+            chunk_type=str(data.get("chunk_type", "image")),
         )
 
 
@@ -390,3 +419,37 @@ class CharacterLimitChunker:
             "CharacterLimitChunker.chunk_files is not implemented. "
             "Use process_chunks() in a pipeline instead."
         )
+
+
+class ImageChunker:
+    """Creates one chunk per image file.
+
+    Unlike TextChunker which splits text into overlapping word chunks,
+    ImageChunker treats each image as a single unit for embedding.
+    """
+
+    def chunk_file(self, file_path: Path) -> list[ImageChunk]:
+        """Create a single chunk for an image file.
+
+        Args:
+            file_path: Path to the image file
+
+        Returns:
+            List containing a single ImageChunk
+        """
+        return [ImageChunk(source_path=str(file_path))]
+
+    def chunk_files(self, files: list[Path]) -> list[ImageChunk]:
+        """Create chunks for multiple image files.
+
+        Args:
+            files: List of image file paths
+
+        Returns:
+            List of ImageChunks (one per file)
+        """
+        chunks = []
+        for file_path in files:
+            chunks.extend(self.chunk_file(file_path))
+        logger.info("Created %d image chunks from %d files", len(chunks), len(files))
+        return chunks
