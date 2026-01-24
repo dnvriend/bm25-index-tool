@@ -6,9 +6,10 @@ and has been reviewed and tested by a human.
 
 import json
 import time
-from typing import Annotated
+from typing import Annotated, Any
 
 import typer
+from tqdm import tqdm  # type: ignore
 
 from bm25_index_tool.config.models import VectorConfig
 from bm25_index_tool.core.file_discovery import discover_files
@@ -320,23 +321,58 @@ def update_command(
 
                         chunks = pipeline.chunk_files(files_to_embed)
                         if chunks:
-                            chunk_texts = [chunk.text for chunk in chunks]
-                            embeddings = embeddings_client.embed_texts(chunk_texts)
-
-                            for idx, chunk in enumerate(chunks):
-                                if idx < len(embeddings):
+                            # Build document ID lookup
+                            file_doc_ids: dict[str, int] = {}
+                            for chunk in chunks:
+                                if chunk.source_path not in file_doc_ids:
                                     doc = storage.get_document(chunk.source_path)
                                     if doc:
-                                        storage.add_chunk(
-                                            document_id=doc.id,
-                                            chunk_index=chunk.chunk_index,
-                                            chunk_type="text",
-                                            text=chunk.text,
-                                            start_word=chunk.start_word,
-                                            end_word=chunk.end_word,
-                                            word_count=chunk.word_count,
-                                            embedding=embeddings[idx],
+                                        file_doc_ids[chunk.source_path] = doc.id
+
+                            # Process in batches with progress bar
+                            batch_size = 50
+                            show_progress = format != "json"
+                            progress_bar = (
+                                tqdm(total=len(chunks), desc="Embedding chunks")
+                                if show_progress
+                                else None
+                            )
+
+                            for i in range(0, len(chunks), batch_size):
+                                batch_chunks = chunks[i : i + batch_size]
+                                batch_texts = [c.text for c in batch_chunks]
+
+                                # Generate embeddings for this batch
+                                batch_embeddings = embeddings_client.embed_texts(batch_texts)
+
+                                # Prepare batch data for storage
+                                chunks_data: list[dict[str, Any]] = []
+                                for idx, chunk in enumerate(batch_chunks):
+                                    doc_id = file_doc_ids.get(chunk.source_path)
+                                    if doc_id is not None and idx < len(batch_embeddings):
+                                        chunks_data.append(
+                                            {
+                                                "document_id": doc_id,
+                                                "chunk_index": chunk.chunk_index,
+                                                "chunk_type": "text",
+                                                "text": chunk.text,
+                                                "start_word": chunk.start_word,
+                                                "end_word": chunk.end_word,
+                                                "word_count": chunk.word_count,
+                                                "embedding": batch_embeddings[idx],
+                                            }
                                         )
+
+                                # Store batch
+                                if chunks_data:
+                                    storage.add_chunks_batch(chunks_data)
+
+                                # Update progress bar
+                                if progress_bar:
+                                    progress_bar.update(len(batch_chunks))
+
+                            if progress_bar:
+                                progress_bar.close()
 
                     # Update vector metadata
                     chunk_count = storage.get_chunk_count()

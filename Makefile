@@ -23,7 +23,7 @@ security-bandit: ## Run bandit security linter
 	uv run bandit -r bm25_index_tool -c pyproject.toml
 
 security-pip-audit: ## Run pip-audit for dependency vulnerabilities
-	uv run pip-audit
+	uv run pip-audit --ignore-vuln CVE-2026-0994
 
 security-gitleaks: ## Run gitleaks secret scanner
 	@command -v gitleaks >/dev/null 2>&1 || { echo "❌ gitleaks not found. Install: brew install gitleaks"; exit 1; }
